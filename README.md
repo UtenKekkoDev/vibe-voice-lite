@@ -60,7 +60,7 @@ Qwen 语音后台预热后驻留；重启语音或退出程序会释放它。固
 cargo build --locked --release --bin vibe-voice-lite
 ```
 
-首次构建需联网下载 crates 和 ONNX Runtime。项目内包含官方 pollster 0.4.0 源码，不依赖开发者电脑上的路径。
+首次构建需联网下载 crates 和 ONNX Runtime。项目内包含官方 pollster 0.4.0 源码，以及修正了新版 Cargo DLL 复制路径的 ort-sys 构建兼容补丁；不依赖开发者电脑上的路径。
 
 ```powershell
 cargo fmt --all --check

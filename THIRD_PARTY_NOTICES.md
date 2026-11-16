@@ -77,3 +77,7 @@ See `.gitignore` for the current exclusion list.
 ## Vendored pollster
 
 Official pollster 0.4.0 (MIT OR Apache-2.0), with both license files in vendor/pollster. Original crate archive SHA-256: 2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3. This replaces the former local compatibility stub.
+
+## Vendored ort-sys
+
+ort-sys 2.0.0-rc.10 (MIT OR Apache-2.0) is included in vendor/ort-sys with both original license files. A small build-script patch fixes runtime DLL copying with Cargo's nested build output layout; see vendor/ort-sys/PATCH.md. Runtime bindings and download verification are unchanged.

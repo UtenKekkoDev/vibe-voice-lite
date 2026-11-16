@@ -42,3 +42,5 @@ hound = "3.5"
 [patch.crates-io]
 # Official pollster 0.4.0 source, included for reproducible offline builds.
 pollster = { path = "vendor/pollster" }
+# Keep runtime DLL copying compatible with Cargo's nested build output layout.
+ort-sys = { path = "vendor/ort-sys" }

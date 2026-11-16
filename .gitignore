@@ -42,3 +42,4 @@ __pycache__/
 /docs/assets/
 /docs/MODEL-ALTERNATIVES.txt
 /assets/mic-main-white.png
+/vendor/ort-sys/.cargo-checksum.json
