@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<title>Vibe Voice Lite — voice and conversation</title>
+<rect x="8" y="8" width="240" height="240" rx="61" fill="#393d47"/>
+<rect x="11" y="11" width="234" height="234" rx="58" fill="#1a1c22"/>
+<g fill="#ff6b5e"><rect x="46" y="57" width="164" height="124" rx="34"/>
+<path d="M78 168V207L121 171Z"/></g>
+<g fill="#fffaf6"><rect x="84" y="100" width="16" height="40" rx="8"/>
+<rect x="120" y="80" width="16" height="80" rx="8"/>
+<rect x="156" y="108" width="16" height="24" rx="8"/></g>
+</svg>

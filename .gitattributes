@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.rgba binary
+# Preserve upstream Python formatting without treating it as project whitespace.
+tts/faster_qwen3_tts/** -whitespace
+vendor/** -whitespace

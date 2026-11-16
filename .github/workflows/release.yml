@@ -1,0 +1,51 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Checks
+        run: |
+          python scripts/audit_release.py
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
+          python -m compileall -q tts scripts
+      - name: Build
+        run: cargo build --locked --release --bin vibe-voice-lite
+      - name: Package without models or personal configuration
+        run: ./scripts/package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            dist/*.zip
+            dist/*.sha256
+      - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          draft: true
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          body: |
+            Windows x64 build of Vibe Voice Lite.
+            Models, API keys, Python and CUDA runtime are not bundled.
+            See README.md and docs/TTS.md for setup and supported controls.

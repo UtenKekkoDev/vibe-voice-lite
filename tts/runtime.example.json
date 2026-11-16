@@ -1,0 +1,5 @@
+{
+  "python": "../.venv-tts/Scripts/python.exe",
+  "model": "../models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  "style_instruction": "用轻柔亲切的日常交谈语气说话。语速稍慢，音量柔和且稳定，停顿自然，句末轻轻上扬，不撒娇，不夸张，不使用播音腔。"
+}

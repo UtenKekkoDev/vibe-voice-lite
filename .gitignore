@@ -1,0 +1,44 @@
+/target/
+/target-live/
+/.cargo-home/
+/.rustup-home/
+
+.env
+.env.*
+*.log
+*.swp
+
+# Local model and audio artifacts should not be committed.
+/official-models/
+/models/
+*.onnx
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# User configuration, model/runtime installations and test output.
+/tts/runtime.json
+/tts/worker-test-results.json
+__pycache__/
+*.py[cod]
+*.safetensors
+*.pt
+*.pth
+*.npz
+*.tar.bz2
+*.zip
+*.exe
+*.dll
+*.pdb
+*.res
+/.venv*/
+/dist/
+/release-check/
+/settings.json
+**/settings.json
+# Retired installer and legacy documentation images are not shipped.
+/wix/
+/docs/assets/
+/docs/MODEL-ALTERNATIVES.txt
+/assets/mic-main-white.png

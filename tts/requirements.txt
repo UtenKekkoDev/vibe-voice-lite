@@ -1,0 +1,6 @@
+# Install CUDA PyTorch separately; see docs/TTS.md.
+qwen-tts==0.1.1
+transformers==4.57.3
+numpy==2.3.5
+sounddevice==0.5.6
+soundfile==0.14.0
