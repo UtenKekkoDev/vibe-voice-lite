@@ -21,13 +21,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Checks
-        run: |
-          python scripts/audit_release.py
-          cargo fmt --all --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets
-          python -m compileall -q tts scripts
+      - name: Audit publishable files
+        run: python scripts/audit_release.py
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Check and lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Unit tests
+        run: cargo test --locked --all-targets
+      - name: Python syntax
+        run: python -m compileall -q tts scripts
       - name: Build
         run: cargo build --locked --release --bin vibe-voice-lite
       - name: Package without models or personal configuration
