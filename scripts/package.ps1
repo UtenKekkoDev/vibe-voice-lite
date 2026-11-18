@@ -12,7 +12,7 @@ if (!(Test-Path -LiteralPath (Join-Path $binaryRoot 'vibe-voice-lite.exe'))) { t
 New-Item -ItemType Directory -Path (Join-Path $bundle 'tts/faster_qwen3_tts') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $binaryRoot 'vibe-voice-lite.exe') -Destination $bundle
 Get-ChildItem -LiteralPath $binaryRoot -Filter '*.dll' -File | Copy-Item -Destination $bundle
-foreach ($file in @('README.md','README.en.md','LICENSE','SECURITY.md','THIRD_PARTY_NOTICES.md')) {
+foreach ($file in @('README.md','README.en.md','CONTRIBUTING.md','LICENSE','SECURITY.md','THIRD_PARTY_NOTICES.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $bundle
 }
 New-Item -ItemType Directory -Path (Join-Path $bundle 'docs'),(Join-Path $bundle 'assets') | Out-Null

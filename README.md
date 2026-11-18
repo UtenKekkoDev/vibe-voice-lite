@@ -35,7 +35,9 @@ Windows 上的按住说话工具：语音转写、AI 整理开发需求，以及
 
 ## 安装与模型
 
-需要 Windows 10/11 x64、麦克风、识别模型，以及 [Microsoft Visual C++ x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)。解压发布 ZIP 后运行 exe；它没有数字签名，**不包含模型权重、API Key、Python 或 CUDA 环境**。
+前往 [Windows 构建列表](https://github.com/UtenKekkoDev/vibe-voice-lite/actions/workflows/ci.yml?query=branch%3Amain)，打开最近一次成功的 main 构建，在 **Artifacts** 下载 **windows-ci-bundle**（需登录 GitHub）。解开外层压缩包，再解压里面的 `vibe-voice-lite-windows-x64.zip`，运行 `vibe-voice-lite.exe`。正式版会列在 [Releases](https://github.com/UtenKekkoDev/vibe-voice-lite/releases)。
+
+需要 Windows 10/11 x64、麦克风、识别模型，以及 [Microsoft Visual C++ x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)。当前构建没有数字签名，**不包含模型权重、API Key、Python 或 CUDA 环境**。
 
 - 本地识别：下载官方 sherpa-onnx SenseVoice INT8 模型，在设置中选择模型目录并检查。见[模型说明](docs/MODELS.zh-CN.md)。也可放在 exe 旁的 `models/` 下。
 - 在线识别：可选 Qwen-ASR Realtime，将音频发送到配置的服务。

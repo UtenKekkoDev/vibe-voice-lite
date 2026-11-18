@@ -1,8 +1,8 @@
 #include <winver.h>
 1 ICON "assets/app.ico"
 1 VERSIONINFO
-FILEVERSION 0,1,0,0
-PRODUCTVERSION 0,1,0,0
+FILEVERSION VIBE_VERSION_NUM
+PRODUCTVERSION VIBE_VERSION_NUM
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -13,11 +13,11 @@ BEGIN
   BLOCK "040904b0"
   BEGIN
    VALUE "FileDescription", "Vibe Voice Lite"
-   VALUE "FileVersion", "0.1.0"
+   VALUE "FileVersion", VIBE_VERSION_STR
    VALUE "InternalName", "vibe-voice-lite"
    VALUE "OriginalFilename", "vibe-voice-lite.exe"
    VALUE "ProductName", "Vibe Voice Lite"
-   VALUE "ProductVersion", "0.1.0"
+   VALUE "ProductVersion", VIBE_VERSION_STR
    VALUE "LegalCopyright", "MIT License"
   END
  END

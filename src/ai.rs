@@ -164,6 +164,28 @@ const INTERVIEW_SUMMARY_PROMPT: &str = concat!(
     "未提到且未问过的范围不要凭空补充。每条简短具体，无需重复标题。没有事项时使用空数组。结束口令不是需求。"
 );
 
+fn validated_endpoint(address: &str) -> Result<url::Url> {
+    let endpoint = url::Url::parse(address.trim()).context("AI 接口地址无效")?;
+    if !matches!(endpoint.scheme(), "https" | "http") {
+        bail!("AI 接口地址应使用 HTTP 或 HTTPS");
+    }
+    if !endpoint.username().is_empty() || endpoint.password().is_some() {
+        bail!("请在 API Key 字段填写凭据");
+    }
+    if endpoint.scheme() == "http" {
+        let local = match endpoint.host() {
+            Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        };
+        if !local {
+            bail!("远程 AI 接口必须使用 HTTPS，只有本机服务可以使用 HTTP");
+        }
+    }
+    Ok(endpoint)
+}
+
 pub fn polish(
     config: &AiConfig,
     mode: InputMode,
@@ -207,13 +229,7 @@ pub fn polish(
     if config.model.trim().is_empty() || config.endpoint.trim().is_empty() {
         bail!("请填写 AI 接口地址和模型");
     }
-    let endpoint = url::Url::parse(config.endpoint.trim()).context("AI 接口地址无效")?;
-    if !matches!(endpoint.scheme(), "https" | "http") {
-        bail!("AI 接口地址应使用 HTTP 或 HTTPS");
-    }
-    if !endpoint.username().is_empty() || endpoint.password().is_some() {
-        bail!("请在 API Key 字段填写凭据");
-    }
+    let endpoint = validated_endpoint(&config.endpoint)?;
     if matches!(
         endpoint.host_str(),
         Some("api.deepseek.com" | "api.openai.com")
@@ -380,6 +396,27 @@ fn parse_response(value: &Value) -> Result<Polished> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plaintext_ai_endpoints_must_be_loopback() {
+        for address in [
+            "http://localhost:11434/api",
+            "http://127.0.0.2:8080",
+            "http://[::1]",
+            "https://example.org/api",
+        ] {
+            assert!(validated_endpoint(address).is_ok(), "{address}");
+        }
+        for address in [
+            "http://example.org",
+            "http://localhost.example.org",
+            "http://192.168.0.1",
+            "http://[::2]",
+            "https://user:secret@example.org",
+        ] {
+            assert!(validated_endpoint(address).is_err(), "{address}");
+        }
+    }
 
     #[test]
     fn interview_end_command_and_summary_are_explicit() {

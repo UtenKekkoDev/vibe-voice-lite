@@ -25,5 +25,5 @@ When reporting, include:
 - The app uses PowerShell only for the folder picker. Microphone callbacks do not write temporary state files.
 - Settings include the AI service key encrypted with Windows DPAPI for the current user, bound to the configured endpoint. Clearing the key removes the saved value. Qwen-ASR keys remain session-only. Recordings and transcripts are kept out of settings.
 - Paste checks the remembered external window and foreground focus; delivery errors preserve the transcript.
-- Local SenseVoice and Qwen TTS inference do not upload content. Online Qwen-ASR sends audio to the configured service. AI editing and interviews send transcripts, glossary and conversation history to the selected endpoint. Use HTTPS for remote services; HTTP is intended for trusted local endpoints.
+- Local SenseVoice and Qwen TTS inference do not upload content. Online Qwen-ASR sends audio to the configured service. AI editing and interviews send transcripts, glossary and conversation history to the selected endpoint. Remote AI services require HTTPS. Plain HTTP is accepted only for localhost or an IP loopback address.
 - Model files are supplied by users and are not bundled with this repository.

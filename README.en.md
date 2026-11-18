@@ -20,6 +20,8 @@ Final text is copied and Ctrl+V is sent only if the selected external window is 
 
 ## Setup
 
+Open the latest successful main run in [Windows builds](https://github.com/UtenKekkoDev/vibe-voice-lite/actions/workflows/ci.yml?query=branch%3Amain). Sign in to GitHub and download **windows-ci-bundle** under **Artifacts**. Extract it, then unzip `vibe-voice-lite-windows-x64.zip` and launch `vibe-voice-lite.exe`. Published versions appear under [Releases](https://github.com/UtenKekkoDev/vibe-voice-lite/releases).
+
 Windows 10/11 x64, a microphone and the [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) are required. Release ZIPs are unsigned and exclude models, credentials, Python and CUDA.
 
 - Local recognition: install the [SenseVoice model](docs/MODELS.md), select its directory and run the check in Settings.

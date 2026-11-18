@@ -47,6 +47,7 @@ pub struct SettingsView {
     pub qwen_url: String,
     pub status: String,
     pub checking: bool,
+    pub save_warning: Option<String>,
     pending_browse: Option<Receiver<Option<String>>>,
 }
 
@@ -70,6 +71,7 @@ impl SettingsView {
             qwen_url: state.qwen_url.clone(),
             status: "尚未检查模型。".to_string(),
             checking: false,
+            save_warning: None,
             pending_browse: None,
         }
     }
@@ -154,6 +156,9 @@ pub fn show(
                                 .size(12.0)
                                 .color(egui::Color32::from_gray(140)),
                         );
+                        if let Some(message) = &view.save_warning {
+                            ui.colored_label(ui.visuals().warn_fg_color, message);
+                        }
                         ui.add_space(14.0);
 
                         ui.label(RichText::new("触发键").strong());
@@ -270,7 +275,7 @@ pub fn show(
                             changes.push(SettingsAction::Mode(view.input_mode));
                         }
                         if view.input_mode == InputMode::Interview {
-                            ui.label("每次只问一个重点；按住右 Ctrl 回答。单独说“先整理到这里”结束并输出已确定和待定事项。切换模式或 Esc 取消当前访谈。");
+                            ui.label(format!("每次只问一个重点。按住 {} 回答。单独说“先整理到这里”结束并输出已确定和待定事项。切换模式或 Esc 取消当前访谈。", holdkey::label(&view.hold_key)));
                         }
                         let mut paste = view.auto_paste;
                         if ui.checkbox(&mut paste, "识别后自动粘贴到原窗口").changed() {

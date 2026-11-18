@@ -70,6 +70,7 @@ pub struct VoiceLiteApp {
     result_shown: String,
     paste_note: Option<String>,
     saved_config: serde_json::Value,
+    retry_save_at: Option<Instant>,
     last_down: bool,
     started_at: Instant,
     placed: bool,
@@ -172,6 +173,7 @@ impl VoiceLiteApp {
             result_shown: String::new(),
             paste_note: None,
             saved_config: serde_json::Value::Null,
+            retry_save_at: None,
             last_down: false,
             started_at: Instant::now(),
             placed: false,
@@ -243,7 +245,7 @@ impl VoiceLiteApp {
         match action {
             TrayAction::Settings => self.open_settings(),
             TrayAction::Mode(mode) => self.set_mode(mode),
-            TrayAction::ToggleAutoPaste => self.state.auto_paste = !self.state.auto_paste,
+            TrayAction::ToggleAutoPaste => self.set_auto_paste(!self.state.auto_paste),
         }
         if let Ok(mut view) = self.settings_view.lock() {
             view.input_mode = self.state.input_mode;
@@ -350,6 +352,13 @@ impl VoiceLiteApp {
         self.state.input_state = InputState::Idle;
     }
 
+    fn set_auto_paste(&mut self, on: bool) {
+        self.state.auto_paste = on;
+        if let Some(tray) = &self.tray {
+            tray.set_auto_paste(on);
+        }
+    }
+
     fn set_mode(&mut self, mode: InputMode) {
         if self.state.input_mode != mode {
             self.cancel_clarification();
@@ -405,22 +414,8 @@ impl VoiceLiteApp {
             "未自动粘贴 · 可以开始新的口述".into()
         } else if ai_failed {
             "AI 服务异常 · 未自动粘贴".into()
-        } else if question.is_some() && self.state.input_mode == InputMode::Interview {
-            format!(
-                "需求访谈 · 按住{}回答 · 说“先整理到这里”结束",
-                holdkey::label(&self.state.hold_key)
-            )
         } else if question.is_some() {
-            format!(
-                "AI 等待补充 · 按住{}回答 · Esc 取消",
-                holdkey::label(&self.state.hold_key)
-            )
-        } else if review
-            && ai_note
-                .as_deref()
-                .is_some_and(|n| n.starts_with("AI 整理失败"))
-        {
-            "AI 整理失败 · 原文已保留 · 未自动粘贴".into()
+            question_footer(self.state.input_mode).into()
         } else if review {
             "AI 仍有待确认项 · 请查看文字结果".into()
         } else if let Some(note) = ai_note.as_deref() {
@@ -477,7 +472,8 @@ impl VoiceLiteApp {
             return;
         }
         let down = holdkey::is_down(&self.state.hold_key);
-        if matches!(self.phase, Phase::Awaiting)
+        if self.state.clarification.is_some()
+            && matches!(self.phase, Phase::Awaiting | Phase::Done { .. })
             && !settings_focused
             && unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x1B) }
                 < 0
@@ -574,7 +570,13 @@ impl VoiceLiteApp {
             _ => false,
         };
         if expired {
-            self.phase = Phase::Idle;
+            if let Some(pending) = &self.state.clarification {
+                self.result_text.clone_from(&pending.question);
+                self.paste_note = Some(question_footer(pending.mode).into());
+                self.phase = Phase::Awaiting;
+            } else {
+                self.phase = Phase::Idle;
+            }
         }
     }
 
@@ -639,7 +641,9 @@ impl VoiceLiteApp {
             return;
         }
         if let Ok(mut view) = self.settings_view.lock() {
+            let warning = view.save_warning.take();
             *view = SettingsView::from_state(&self.state);
+            view.save_warning = warning;
         }
         self.settings_open = true;
     }
@@ -698,11 +702,15 @@ impl VoiceLiteApp {
                                 continue;
                             }
                         }
+                    } else {
+                        config
+                            .protected_key
+                            .clone_from(&self.state.ai.protected_key);
                     }
                     self.state.ai = config;
                 }
                 SettingsAction::HoldKey(key) => self.state.hold_key = key,
-                SettingsAction::AutoPaste(on) => self.state.auto_paste = on,
+                SettingsAction::AutoPaste(on) => self.set_auto_paste(on),
                 SettingsAction::Mode(mode) => self.set_mode(mode),
                 SettingsAction::Online(online) => {
                     self.state.model_provider = if online {
@@ -740,18 +748,33 @@ impl VoiceLiteApp {
     }
 
     fn persist(&mut self) {
+        self.persist_with(config::save);
+    }
+
+    fn persist_with(&mut self, save: impl FnOnce(&serde_json::Value) -> anyhow::Result<()>) {
+        if self
+            .retry_save_at
+            .is_some_and(|deadline| Instant::now() < deadline)
+        {
+            return;
+        }
         let snapshot = config::snapshot(&self.state);
-        if snapshot == self.saved_config {
+        if snapshot == self.saved_config && self.retry_save_at.is_none() {
             return;
         }
-        if let Err(error) = config::save(&snapshot) {
-            self.set_error(format!("设置保存失败：{error}"));
+        if snapshot != self.saved_config
+            && let Err(error) = save(&snapshot)
+        {
+            self.retry_save_at = Some(Instant::now() + Duration::from_secs(5));
+            if let Ok(mut view) = self.settings_view.lock() {
+                view.save_warning = Some(format!("设置仅在本次运行生效，将重试保存。{error}"));
+            }
             return;
         }
+        self.retry_save_at = None;
         self.saved_config = snapshot;
-        if let Some(tray) = &self.tray {
-            tray.set_mode(self.state.input_mode);
-            tray.set_auto_paste(self.state.auto_paste);
+        if let Ok(mut view) = self.settings_view.lock() {
+            view.save_warning = None;
         }
     }
 
@@ -770,7 +793,7 @@ impl VoiceLiteApp {
             Phase::Done { .. } | Phase::Awaiting => {
                 let wrap = CARD_W - CARD_PAD * 2.0;
                 let shown = fit_result(ctx, &self.result_text, wrap, CARD_MAX_H);
-                let height = card_height(ctx, &shown, wrap);
+                let height = card_height(ctx, &shown, wrap).min(CARD_MAX_H);
                 self.result_shown = shown;
                 (CARD_W, height)
             }
@@ -799,12 +822,24 @@ impl VoiceLiteApp {
                 let rect = Rect::from_min_size(Pos2::ZERO, vec2(width, height));
                 match phase {
                     Phase::Idle => paint_dot(painter, rect),
-                    Phase::Done { ok, .. } => {
-                        paint_card(painter, rect, *ok, false, &shown, note.as_deref())
-                    }
-                    Phase::Awaiting => {
-                        paint_card(painter, rect, true, true, &shown, note.as_deref())
-                    }
+                    Phase::Done { ok, .. } => paint_card(
+                        painter,
+                        rect,
+                        *ok,
+                        None,
+                        &shown,
+                        &self.result_text,
+                        note.as_deref(),
+                    ),
+                    Phase::Awaiting => paint_card(
+                        painter,
+                        rect,
+                        true,
+                        Some(&key),
+                        &shown,
+                        &self.result_text,
+                        note.as_deref(),
+                    ),
                     Phase::Recording => paint_pill(
                         painter,
                         rect,
@@ -923,12 +958,21 @@ fn paint_pill(painter: &egui::Painter, rect: Rect, state: PillState<'_>) {
     }
 }
 
+fn question_footer(mode: InputMode) -> &'static str {
+    if mode == InputMode::Interview {
+        "说“先整理到这里”结束访谈 · Esc 取消"
+    } else {
+        "回答后继续整理 · Esc 取消"
+    }
+}
+
 fn paint_card(
     painter: &egui::Painter,
     rect: Rect,
     ok: bool,
-    waiting: bool,
+    answer_key: Option<&str>,
     text: &str,
+    full_text: &str,
     note: Option<&str>,
 ) {
     let radius = 18.0;
@@ -945,11 +989,27 @@ fn paint_card(
         StrokeKind::Inside,
     );
 
-    let color = if ok { DONE } else { ERROR };
+    let color = if answer_key.is_some() {
+        Color32::from_rgb(250, 198, 108)
+    } else if ok {
+        DONE
+    } else {
+        ERROR
+    };
     let left = rect.left() + CARD_PAD;
     let top = rect.top();
 
-    if ok {
+    if answer_key.is_some() {
+        let center = Pos2::new(left + 6.0, top + 23.0);
+        painter.circle_stroke(center, 7.0, Stroke::new(1.4_f32, color));
+        painter.text(
+            center,
+            Align2::CENTER_CENTER,
+            "?",
+            FontId::proportional(11.0),
+            color,
+        );
+    } else if ok {
         painter.add(egui::Shape::line(
             vec![
                 Pos2::new(left, top + 24.0),
@@ -970,12 +1030,10 @@ fn paint_card(
     painter.text(
         Pos2::new(left + 22.0, top + 23.0),
         Align2::LEFT_CENTER,
-        if waiting {
-            "需要确认"
-        } else if ok {
-            "已识别"
-        } else {
-            "识别失败"
+        match answer_key {
+            Some(key) => format!("需要确认   ·   按住 {key} 回答"),
+            None if ok => "已识别".into(),
+            None => "识别失败".into(),
         },
         FontId::proportional(12.0),
         color,
@@ -983,7 +1041,11 @@ fn paint_card(
     painter.text(
         Pos2::new(rect.right() - CARD_PAD, top + 23.0),
         Align2::RIGHT_CENTER,
-        format!("{} 字", text.chars().count()),
+        if text == full_text {
+            format!("{} 字", full_text.chars().count())
+        } else {
+            format!("仅预览 · 共 {} 字", full_text.chars().count())
+        },
         FontId::proportional(11.0),
         MUTED,
     );
@@ -1021,7 +1083,7 @@ fn card_height(ctx: &Context, text: &str, wrap: f32) -> f32 {
             wrap,
         )
     });
-    (46.0 + galley.size().y + 30.0).clamp(CARD_MIN_H, CARD_MAX_H)
+    (46.0 + galley.size().y + 30.0).max(CARD_MIN_H)
 }
 
 /// Cut the transcript down until it fits the tallest card, keeping an ellipsis.
@@ -1041,7 +1103,7 @@ fn fit_result(ctx: &Context, text: &str, wrap: f32, max_height: f32) -> String {
             high = mid;
         }
     }
-    truncate(&clipped, low.max(16))
+    truncate(&clipped, low)
 }
 
 pub fn truncate(text: &str, max_chars: usize) -> String {
@@ -1197,6 +1259,7 @@ mod tests {
             result_text: String::new(),
             result_shown: String::new(),
             paste_note: None,
+            retry_save_at: None,
             last_down: false,
             started_at: Instant::now(),
             placed: false,
@@ -1223,6 +1286,67 @@ mod tests {
         app.settings_tx.send(SettingsAction::Ai(ai)).unwrap();
         app.drain_settings();
         assert!(app.state.ai.protected_key.is_empty());
+    }
+
+    #[test]
+    fn changing_the_glossary_after_the_key_keeps_the_restart_credential() {
+        let mut app = test_app();
+        let mut form = app.state.ai.clone();
+        form.api_key = "test-only-replacement".into();
+        app.settings_tx
+            .send(SettingsAction::Ai(form.clone()))
+            .unwrap();
+        app.drain_settings();
+        form.glossary = "刷新令牌".into();
+        app.settings_tx.send(SettingsAction::Ai(form)).unwrap();
+        app.drain_settings();
+        let mut restored = NativeAppState::default();
+        config::apply(&mut restored, &config::snapshot(&app.state));
+        assert_eq!(
+            crate::credentials::unprotect(&restored.ai.protected_key, &restored.ai.endpoint)
+                .unwrap(),
+            "test-only-replacement"
+        );
+    }
+
+    #[test]
+    fn write_failure_keeps_recording_and_retries_latest_settings() {
+        let mut app = test_app();
+        app.state.auto_paste = !app.state.auto_paste;
+        app.phase = Phase::Recording;
+        app.state.input_state = InputState::Recording;
+        app.persist_with(|_| anyhow::bail!("outside test directory"));
+        assert!(matches!(app.phase, Phase::Recording));
+        assert_eq!(app.state.input_state, InputState::Recording);
+        app.open_settings();
+        assert!(app.settings_view.lock().unwrap().save_warning.is_some());
+        app.persist_with(|_| panic!("must back off"));
+        app.state.hold_key = "F9".into();
+        app.retry_save_at = Some(Instant::now());
+        app.persist_with(|snapshot| {
+            assert_eq!(snapshot["hold_key"], "F9");
+            Ok(())
+        });
+        assert_eq!(app.saved_config, config::snapshot(&app.state));
+        assert!(app.settings_view.lock().unwrap().save_warning.is_none());
+    }
+
+    #[test]
+    fn short_answer_restores_question_and_can_be_cancelled() {
+        let mut app = test_app();
+        app.accept_finish_result(question_result());
+        app.phase = Phase::Recording;
+        app.recording_started_at = Some(Instant::now());
+        app.stop_recording();
+        let Phase::Done { until, .. } = &mut app.phase else {
+            panic!("missing short press feedback")
+        };
+        *until = Instant::now();
+        app.expire_phase();
+        assert!(matches!(app.phase, Phase::Awaiting));
+        assert_eq!(app.result_text, "访问令牌还是刷新令牌？");
+        app.cancel_clarification();
+        assert!(app.state.clarification.is_none());
     }
 
     #[test]
@@ -1273,6 +1397,19 @@ mod tests {
         assert_eq!(truncate("一二三四五", 3), "一二三…");
         assert_eq!(truncate("", 3), "");
     }
+    #[test]
+    fn long_preview_fits_above_the_footer_and_retains_the_original() {
+        let ctx = Context::default();
+        let full = "One line per item.\n".repeat(100);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let wrap = CARD_W - CARD_PAD * 2.0;
+            let shown = fit_result(ctx, &full, wrap, CARD_MAX_H);
+            assert!(shown.ends_with('…'));
+            assert!(shown.chars().count() < full.chars().count());
+            assert!(card_height(ctx, &shown, wrap) <= CARD_MAX_H);
+        });
+    }
+
     fn question_result() -> FinishInputResult {
         FinishInputResult {
             clarification: Some(crate::ai::Clarification {
