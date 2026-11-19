@@ -39,21 +39,21 @@ impl TrayController {
         let settings = MenuItem::with_id("lite.settings", "设置…", true, None);
         let code = CheckMenuItem::with_id(
             "lite.code",
-            "代码模式（AI 整理）",
+            InputMode::CodeEdit.numbered_label(),
             true,
             mode == InputMode::CodeEdit,
             None,
         );
         let direct = CheckMenuItem::with_id(
             "lite.direct",
-            "普通口述",
+            InputMode::DirectPrompt.numbered_label(),
             true,
             mode == InputMode::DirectPrompt,
             None,
         );
         let interview = CheckMenuItem::with_id(
             "lite.interview",
-            "需求访谈（逐步提问）",
+            InputMode::Interview.numbered_label(),
             true,
             mode == InputMode::Interview,
             None,

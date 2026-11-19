@@ -19,6 +19,7 @@ pub struct DeliveryTarget {
 }
 #[derive(Clone)]
 pub struct FinishInputSnapshot {
+    last_interview_turn: String,
     clarification: Option<crate::ai::Clarification>,
     ai: crate::ai::AiConfig,
     input_mode: InputMode,
@@ -36,10 +37,42 @@ pub struct FinishInputSnapshot {
     qwen_status: String,
 }
 
+impl From<&NativeAppState> for FinishInputSnapshot {
+    fn from(state: &NativeAppState) -> Self {
+        Self {
+            last_interview_turn: state.last_interview_turn.clone(),
+            clarification: state.clarification.clone(),
+            ai: state.ai.clone(),
+            input_mode: state
+                .clarification
+                .as_ref()
+                .map_or(state.input_mode, |c| c.mode),
+            auto_paste: state.auto_paste,
+            model_provider: state.model_provider,
+            local_model_dir: state.local_model_dir.clone(),
+            local_model_ready: state.local_model_ready,
+            local_model_status: state.local_model_status.clone(),
+            local_model_summary: state.local_model_summary.clone(),
+            qwen_api_key: state.qwen_api_key.clone(),
+            qwen_model: state.qwen_model.clone(),
+            qwen_url: state.qwen_url.clone(),
+            qwen_language: state.qwen_language.clone(),
+            qwen_ready: state.qwen_ready,
+            qwen_status: state.qwen_status.clone(),
+        }
+    }
+}
+
 pub struct FinishInputWork {
     capture: RecordingCapture,
     last_recording_info: String,
     snapshot: FinishInputSnapshot,
+}
+
+pub enum FinishEvent {
+    Mode(crate::voice_mode::ModeCommand),
+    NoVerbatimText,
+    Dictation(Box<FinishInputResult>),
 }
 
 pub struct FinishInputResult {
@@ -116,30 +149,15 @@ pub fn begin_finish_input(state: &mut NativeAppState) -> Result<FinishInputWork>
     Ok(FinishInputWork {
         capture,
         last_recording_info,
-        snapshot: FinishInputSnapshot {
-            clarification: state.clarification.clone(),
-            ai: state.ai.clone(),
-            input_mode: state
-                .clarification
-                .as_ref()
-                .map_or(state.input_mode, |c| c.mode),
-            auto_paste: state.auto_paste,
-            model_provider: state.model_provider,
-            local_model_dir: state.local_model_dir.clone(),
-            local_model_ready: state.local_model_ready,
-            local_model_status: state.local_model_status.clone(),
-            local_model_summary: state.local_model_summary.clone(),
-            qwen_api_key: state.qwen_api_key.clone(),
-            qwen_model: state.qwen_model.clone(),
-            qwen_url: state.qwen_url.clone(),
-            qwen_language: state.qwen_language.clone(),
-            qwen_ready: state.qwen_ready,
-            qwen_status: state.qwen_status.clone(),
-        },
+        snapshot: FinishInputSnapshot::from(&*state),
     })
 }
 
-pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> FinishInputResult {
+pub fn run_finish_input_work(
+    work: FinishInputWork,
+    task: &TaskControl,
+    choosing_mode: bool,
+) -> FinishEvent {
     let FinishInputWork {
         capture,
         last_recording_info,
@@ -157,13 +175,20 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
         let normalized_samples =
             resample_to_target(capture.samples, capture.sample_rate, capture.channels);
         task.check()?;
+        let transcript_text = |text: &str| {
+            if snapshot.input_mode == InputMode::Interview {
+                text.trim().to_owned()
+            } else {
+                normalize_text(text)
+            }
+        };
         if snapshot.model_provider == ModelProvider::OnlineQwen {
             let config = qwen_config_from_snapshot(&snapshot);
             qwen_asr::validate_config(&config)?;
             qwen_ready = true;
             qwen_status = format!("Qwen-ASR Realtime 已配置: {}", config.model);
             let transcript = qwen_asr::transcribe_audio(&config, normalized_samples, task)?;
-            let raw_text = normalize_text(&transcript.text);
+            let raw_text = transcript_text(&transcript.text);
             let delivered_text = raw_text.clone();
             task.check()?;
             let delivery_message = "识别结果已保留，可编辑或复制。".to_owned();
@@ -183,7 +208,7 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
             normalized_samples,
             task,
         )?;
-        let raw_text = normalize_text(&transcript.text);
+        let raw_text = transcript_text(&transcript.text);
         if raw_text.is_empty() {
             return Err(anyhow!("未识别到有效语音，请检查麦克风后重试。"));
         }
@@ -198,13 +223,30 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
         ))
     })();
 
-    match result {
-        Ok((raw_text, mut delivered_text, segments, delivery_message)) => {
+    let result = match result {
+        Ok((mut raw_text, mut delivered_text, segments, delivery_message)) => {
             let _ = task.asr_finished.set(std::time::Instant::now());
+            if let Some(command) = crate::voice_mode::classify(&raw_text, choosing_mode) {
+                return FinishEvent::Mode(command);
+            }
             let mut clarification = None;
             let mut review_required = false;
             let mut cancelled = false;
-            let ai_note = if snapshot.ai.active_for(snapshot.input_mode)
+            let verbatim = (snapshot.input_mode == InputMode::Interview)
+                .then(|| crate::voice_mode::verbatim(&raw_text))
+                .flatten();
+            let ai_note = if let Some(request) = verbatim {
+                let source = match request {
+                    crate::voice_mode::Verbatim::Previous => &snapshot.last_interview_turn,
+                    crate::voice_mode::Verbatim::Inline(text) => text,
+                };
+                if source.is_empty() {
+                    return FinishEvent::NoVerbatimText;
+                }
+                raw_text = source.to_owned();
+                delivered_text.clone_from(&raw_text);
+                Some(VERBATIM_COMPLETE.into())
+            } else if snapshot.ai.active_for(snapshot.input_mode)
                 || snapshot.clarification.is_some()
             {
                 match crate::ai::polish(
@@ -240,6 +282,8 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
                                 "AI 等待补充"
                             } else if review_required {
                                 "AI 需要确认"
+                            } else if snapshot.input_mode == InputMode::Interview {
+                                INTERVIEW_COMPLETE
                             } else {
                                 "AI 已整理"
                             }
@@ -247,6 +291,13 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
                         )
                     }
                     Err(error) => {
+                        // polish exposes only fixed diagnostics or a numeric HTTP status.
+                        // Never log the underlying error chain, which can include provider data.
+                        crate::config::lifecycle(&format!(
+                            "ai failure mode={:?} response_received={} reason={error}",
+                            snapshot.input_mode,
+                            task.ai_received.get().is_some()
+                        ));
                         // A failed/malformed AI response never approves an answer.
                         review_required = true;
                         if let Some(c) = &snapshot.clarification {
@@ -317,7 +368,8 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
                 auto_paste: snapshot.auto_paste,
             }
         }
-    }
+    };
+    FinishEvent::Dictation(Box::new(result))
 }
 
 fn next_clarification(
@@ -430,6 +482,18 @@ pub fn apply_finish_result(
     deliver: impl FnOnce(&FinishInputResult) -> Result<()>,
 ) -> Option<String> {
     if result.input_state == InputState::Success {
+        if state.input_mode == InputMode::Interview {
+            match result.ai_note.as_deref() {
+                Some(VERBATIM_COMPLETE | "已取消整理") => state.last_interview_turn.clear(),
+                _ => {
+                    if let Some(turn) = result.raw_text.as_deref()
+                        && !crate::ai::is_interview_control(turn)
+                    {
+                        turn.clone_into(&mut state.last_interview_turn);
+                    }
+                }
+            }
+        }
         state.clarification = result.clarification.clone();
     }
     state.ai_status = result.ai_note.clone().unwrap_or_default();
@@ -470,8 +534,20 @@ pub fn apply_finish_result(
     }
 }
 
-/// Automatic TTS is only for an actual AI clarification question.
-pub fn spoken_question(result: &FinishInputResult) -> Option<String> {
+const VERBATIM_COMPLETE: &str = "已直出原文";
+pub const INTERVIEW_COMPLETE: &str = "访谈已整理";
+pub fn spoken_feedback(result: &FinishInputResult) -> Option<String> {
+    if result.input_state == InputState::Success
+        && result.ai_note.as_deref() == Some(INTERVIEW_COMPLETE)
+        && !result.review_required
+        && result.clarification.is_none()
+        && result
+            .delivered_text
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+    {
+        return Some("好，那就到这里。我把内容整理好了，你看一下。".into());
+    }
     if result.input_state != InputState::Success
         || !result.review_required
         || result.ai_note.as_deref() != Some("AI 需要确认")
@@ -652,6 +728,126 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "requires local SenseVoice and synthetic 16-kHz command WAVs in VIBE_TEST_MODE_WAVS"]
+    fn spoken_mode_commands_bypass_ai_and_delivery() {
+        use crate::voice_mode::ModeCommand;
+        let dir = std::path::PathBuf::from(std::env::var("VIBE_TEST_MODE_WAVS").unwrap());
+        let mut state = NativeAppState {
+            input_mode: InputMode::CodeEdit,
+            local_model_dir: std::env::var("VIBE_TEST_MODEL").unwrap(),
+            ..Default::default()
+        };
+        for (file, choosing, expected) in [
+            ("open", false, Some(ModeCommand::Ask)),
+            ("en", false, Some(ModeCommand::Ask)),
+            ("type", false, Some(ModeCommand::Ask)),
+            (
+                "dictation",
+                true,
+                Some(ModeCommand::Choose(InputMode::DirectPrompt)),
+            ),
+            ("code", true, Some(ModeCommand::Choose(InputMode::CodeEdit))),
+            (
+                "interview",
+                true,
+                Some(ModeCommand::Choose(InputMode::Interview)),
+            ),
+            ("cancel", true, Some(ModeCommand::Cancel)),
+            ("ordinary", true, Some(ModeCommand::Retry)),
+            ("ordinary", false, None),
+        ] {
+            if expected.is_none() {
+                state.input_mode = InputMode::DirectPrompt;
+            }
+            let mut wav = hound::WavReader::open(dir.join(format!("{file}.wav"))).unwrap();
+            let spec = wav.spec();
+            let capture = RecordingCapture {
+                duration_secs: wav.duration() as f32 / spec.sample_rate as f32,
+                sample_rate: spec.sample_rate,
+                channels: spec.channels,
+                samples: wav
+                    .samples::<i16>()
+                    .map(|n| n.unwrap() as f32 / 32768.0)
+                    .collect(),
+            };
+            let work = FinishInputWork {
+                capture,
+                last_recording_info: String::new(),
+                snapshot: FinishInputSnapshot::from(&state),
+            };
+            let task = TaskControl::new(std::time::Duration::from_secs(30));
+            match (run_finish_input_work(work, &task, choosing), expected) {
+                (FinishEvent::Mode(actual), Some(wanted)) => assert_eq!(actual, wanted, "{file}"),
+                (FinishEvent::Dictation(result), None) => {
+                    assert!(
+                        result
+                            .delivered_text
+                            .as_deref()
+                            .unwrap()
+                            .contains("切换模式")
+                    );
+                    assert!(result.auto_paste);
+                }
+                _ => panic!("unexpected routing for {file}"),
+            }
+            assert!(task.ai_received.get().is_none());
+        }
+    }
+
+    #[test]
+    #[ignore = "local SenseVoice with synthetic command WAVs in VIBE_ORDINAL_WAVS"]
+    fn real_number_switches_and_interview_verbatim_bypass_ai() {
+        use crate::voice_mode::ModeCommand;
+        let dir = std::path::PathBuf::from(std::env::var("VIBE_ORDINAL_WAVS").unwrap());
+        let mut state = NativeAppState {
+            input_mode: InputMode::Interview,
+            last_interview_turn: "上一段  Foo".into(),
+            local_model_dir: std::env::var("VIBE_TEST_MODEL").unwrap(),
+            ..Default::default()
+        };
+        for (file, mode, original) in [
+            ("one", Some(InputMode::DirectPrompt), ""),
+            ("two", Some(InputMode::CodeEdit), ""),
+            ("three", Some(InputMode::Interview), ""),
+            ("as_is", None, "上一段  Foo"),
+            ("inline", None, "明天下午3点开会"),
+            ("inline2", None, "明天下午3点开会"),
+            ("as_is", None, ""),
+        ] {
+            let mut wav = hound::WavReader::open(dir.join(format!("{file}.wav"))).unwrap();
+            let capture = RecordingCapture {
+                sample_rate: wav.spec().sample_rate,
+                channels: wav.spec().channels,
+                duration_secs: wav.duration() as f32 / wav.spec().sample_rate as f32,
+                samples: wav
+                    .samples::<i16>()
+                    .map(|n| n.unwrap() as f32 / 32768.0)
+                    .collect(),
+            };
+            let work = FinishInputWork {
+                capture,
+                last_recording_info: String::new(),
+                snapshot: FinishInputSnapshot::from(&state),
+            };
+            let task = TaskControl::new(std::time::Duration::from_secs(20));
+            match run_finish_input_work(work, &task, false) {
+                FinishEvent::Mode(ModeCommand::Choose(actual)) => assert_eq!(Some(actual), mode),
+                FinishEvent::Dictation(r) => {
+                    assert!(mode.is_none() && !original.is_empty());
+                    assert_eq!(r.delivered_text.as_deref(), Some(original));
+                    assert_eq!(r.ai_note.as_deref(), Some(VERBATIM_COMPLETE));
+                    assert!(r.auto_paste && !r.review_required && r.clarification.is_none());
+                    assert!(spoken_feedback(&r).is_none());
+                    apply_finish_result(&mut state, *r, |_| Ok(()));
+                }
+                FinishEvent::NoVerbatimText => assert!(mode.is_none() && original.is_empty()),
+                _ => panic!("wrong route for {file}"),
+            }
+            assert!(task.ai_received.get().is_none());
+        }
+    }
+
+    #[test]
     #[ignore = "requires local ASR model and loopback mock AI"]
     fn real_pipeline_keeps_asking_and_recovers_from_ai_failure() {
         use serde_json::{Value, json};
@@ -716,6 +912,7 @@ mod tests {
         let mut state = NativeAppState::default();
         for step in 0..4 {
             let snapshot = FinishInputSnapshot {
+                last_interview_turn: String::new(),
                 clarification: state.clarification.clone(),
                 ai: crate::ai::AiConfig {
                     endpoint: endpoint.clone(),
@@ -749,7 +946,9 @@ mod tests {
             };
             let task = TaskControl::new(std::time::Duration::from_secs(30));
             let start = std::time::Instant::now();
-            let result = run_finish_input_work(work, &task);
+            let FinishEvent::Dictation(result) = run_finish_input_work(work, &task, false) else {
+                panic!("expected dictation")
+            };
             assert_eq!(result.input_state, InputState::Success);
             let asr = *task.asr_finished.get().expect("ASR completion stamp");
             let ai = *task.ai_received.get().expect("AI response stamp");
@@ -773,7 +972,7 @@ mod tests {
                     Some("最终确认：访问令牌过期时先刷新。")
                 );
             }
-            apply_finish_result(&mut state, result, |_| {
+            apply_finish_result(&mut state, *result, |_| {
                 delivered.set(true);
                 Ok(())
             });
@@ -801,6 +1000,7 @@ mod tests {
             },
             last_recording_info: String::new(),
             snapshot: FinishInputSnapshot {
+                last_interview_turn: String::new(),
                 clarification: None,
                 ai: crate::ai::AiConfig {
                     enabled: false,
@@ -822,11 +1022,19 @@ mod tests {
             },
         };
         let task = TaskControl::new(std::time::Duration::from_secs(30));
-        let disabled = run_finish_input_work(work(InputMode::DirectPrompt), &task);
+        let FinishEvent::Dictation(disabled) =
+            run_finish_input_work(work(InputMode::DirectPrompt), &task, false)
+        else {
+            panic!("expected dictation")
+        };
         assert_eq!(disabled.input_state, InputState::Success);
         assert!(disabled.ai_note.is_none());
         assert_eq!(disabled.raw_text, disabled.delivered_text);
-        let failed = run_finish_input_work(work(InputMode::CodeEdit), &task);
+        let FinishEvent::Dictation(failed) =
+            run_finish_input_work(work(InputMode::CodeEdit), &task, false)
+        else {
+            panic!("expected dictation")
+        };
         assert_eq!(failed.input_state, InputState::Success);
         assert!(failed.ai_note.unwrap().contains("AI 整理失败"));
         assert!(!failed.raw_text.as_ref().unwrap().is_empty());
@@ -957,7 +1165,7 @@ mod tests {
             answers: Vec::new(),
         });
         assert_eq!(
-            spoken_question(&first).as_deref(),
+            spoken_feedback(&first).as_deref(),
             Some("你指的是访问令牌吗？")
         );
         apply_finish_result(&mut state, first, |_| {
@@ -979,7 +1187,7 @@ mod tests {
                 InputMode::CodeEdit,
                 crate::ai::FollowUp::Question(format!("第 {i} 轮问题？")),
             ));
-            assert_eq!(spoken_question(&answer), Some(format!("第 {i} 轮问题？")));
+            assert_eq!(spoken_feedback(&answer), Some(format!("第 {i} 轮问题？")));
             apply_finish_result(&mut state, answer, |_| {
                 panic!("unresolved result must not paste")
             });
@@ -1021,7 +1229,7 @@ mod tests {
         );
     }
     #[test]
-    fn only_pending_ai_questions_are_spoken() {
+    fn only_pending_questions_and_successful_interview_summaries_are_spoken() {
         let mut done = result(InputState::Success);
         for note in [
             None,
@@ -1030,8 +1238,17 @@ mod tests {
             Some("AI 整理失败：test"),
         ] {
             done.ai_note = note.map(str::to_owned);
-            assert!(spoken_question(&done).is_none());
+            assert!(spoken_feedback(&done).is_none());
         }
+        done.ai_note = Some(INTERVIEW_COMPLETE.into());
+        done.delivered_text = Some("已确定：只给同事使用".into());
+        assert_eq!(
+            spoken_feedback(&done).as_deref(),
+            Some("好，那就到这里。我把内容整理好了，你看一下。")
+        );
+        done.delivered_text = None;
+        assert!(spoken_feedback(&done).is_none());
+        done.ai_note = Some("AI 整理失败".into());
         done.review_required = true;
         done.clarification = Some(next_clarification(
             None,
@@ -1039,12 +1256,42 @@ mod tests {
             InputMode::CodeEdit,
             "缓存还是线程？".into(),
         ));
-        assert!(spoken_question(&done).is_none()); // Stale question after AI failure.
+        assert!(spoken_feedback(&done).is_none()); // Stale question after AI failure.
         done.ai_note = Some("AI 需要确认".into());
-        assert_eq!(spoken_question(&done).as_deref(), Some("缓存还是线程？"));
+        assert_eq!(spoken_feedback(&done).as_deref(), Some("缓存还是线程？"));
         done.input_state = InputState::Error;
-        assert!(spoken_question(&done).is_none());
+        assert!(spoken_feedback(&done).is_none());
     }
+    #[test]
+    fn verbatim_memory_tracks_only_the_latest_user_turn_across_summary_and_errors() {
+        let mut state = NativeAppState {
+            input_mode: InputMode::Interview,
+            auto_paste: false,
+            ..Default::default()
+        };
+        for (text, note) in [
+            ("我有个想法", "AI 需要确认"),
+            ("只允许同事用", "AI 整理失败"),
+            ("OK，就这样", INTERVIEW_COMPLETE),
+        ] {
+            let mut r = result(InputState::Success);
+            r.raw_text = Some(text.into());
+            r.ai_note = Some(note.into());
+            apply_finish_result(&mut state, r, |_| Ok(()));
+        }
+        assert_eq!(
+            FinishInputSnapshot::from(&state).last_interview_turn,
+            "只允许同事用"
+        );
+        let mut r = result(InputState::Success);
+        r.ai_note = Some(VERBATIM_COMPLETE.into());
+        r.delivered_text = Some(state.last_interview_turn.clone());
+        assert!(spoken_feedback(&r).is_none());
+        apply_finish_result(&mut state, r, |_| Ok(()));
+        assert!(state.last_interview_turn.is_empty());
+        assert_eq!(state.last_final_result, "只允许同事用");
+    }
+
     #[test]
     fn failed_recognition_keeps_previous_text_without_delivery() {
         let mut state = NativeAppState {

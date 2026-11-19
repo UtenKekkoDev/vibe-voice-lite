@@ -53,17 +53,12 @@ def report_audio_output():
 class Player:
     def __init__(self):
         import numpy as np,sounddevice as sd
+        from audio_output import DefaultOutput
         self.np=np;self.lock=threading.RLock();self.queue=queue.SimpleQueue()
         self.pending=np.zeros(0,dtype='float32');self.id=0;self.active=False
         self.output_marked=False;self.counter=ctypes.c_int64()
         self.finished=threading.Event();self.underruns=0;self.driver_errors=0
-        hosts=sd.query_hostapis()
-        wasapi=next((h for h in hosts if h['name']=='Windows WASAPI'),None)
-        device=wasapi['default_output_device'] if wasapi else sd.default.device[1]
-        self.stream=sd.OutputStream(device=device,samplerate=24000,channels=1,dtype='float32',
-            blocksize=0,latency='low',callback=self.callback,
-            extra_settings=sd.WasapiSettings(auto_convert=True) if wasapi else None)
-        self.stream.start()
+        self.output=DefaultOutput(sd, self.callback)
     def cancel(self):
         with self.lock:
             self.id=0;self.active=False;self.queue=queue.SimpleQueue()
@@ -102,7 +97,7 @@ class Player:
                         self.output_marked = True
                 self.pending=self.pending[n:];written+=n
     def close(self):
-        self.cancel();self.stream.abort();self.stream.close()
+        self.cancel();self.output.close()
 
 try:
     event('loading')
@@ -120,7 +115,14 @@ try:
     event('opening_audio')
     threading.Thread(target=report_audio_output, daemon=True).start()
     with condition: player=Player()
-    event('ready')
+    # Open the stream during warmup when possible. Missing output can recover
+    # on the next request as soon as the user plugs in a playback device.
+    try:
+        player.output.ensure()
+        output_available = True
+    except Exception:
+        output_available = False
+    event('ready', output_available=output_available)
 except Exception:
     event('fatal',message='Qwen 语音加载失败，请检查本地运行环境、模型和输出设备。')
     raise SystemExit(1)
@@ -135,9 +137,12 @@ while True:
         pending=None
         if time.monotonic()-created>30:
             event('error',request,message='播报等待过久，已跳过；文字结果仍保留。');continue
-        player.begin(request)
     started=time.perf_counter();first=True
     try:
+        player.output.ensure()
+        with condition:
+            if request!=latest: continue
+            player.begin(request)
         for audio,sr,info in engine.stream(text):
             with condition:
                 if request!=latest: break

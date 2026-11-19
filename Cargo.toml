@@ -1,6 +1,6 @@
 [package]
 name = "vibe-voice-lite"
-version = "0.2.0-preview.2"
+version = "0.2.0-preview.3"
 edition = "2024"
 authors = ["Yuxuan Sun"]
 description = "Hold-to-talk local voice input bar for Windows, based on vibe-coding-voice."

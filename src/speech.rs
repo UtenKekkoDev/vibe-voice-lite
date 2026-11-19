@@ -208,7 +208,12 @@ impl SpeechOutput {
             match e["event"].as_str().unwrap_or("") {
                 "ready" => {
                     self.ready = true;
-                    self.status = "Qwen 1.7B · Serena 固定风格 · 就绪".into();
+                    self.status = if e["output_available"].as_bool() == Some(false) {
+                        "语音模型已就绪，请连接输出设备后试听"
+                    } else {
+                        "Qwen 1.7B · Serena 固定风格 · 就绪"
+                    }
+                    .into();
                     crate::config::lifecycle("tts ready");
                 }
                 "first_output" => {

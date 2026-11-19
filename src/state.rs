@@ -18,11 +18,19 @@ pub enum InputMode {
 }
 
 impl InputMode {
+    pub fn numbered_label(self) -> &'static str {
+        match self {
+            Self::DirectPrompt => "1 · 语音听写",
+            Self::CodeEdit => "2 · 开发指令",
+            Self::Interview => "3 · 需求问答",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
-            Self::DirectPrompt => "普通口述",
-            Self::CodeEdit => "代码整理",
-            Self::Interview => "需求访谈",
+            Self::DirectPrompt => "语音听写",
+            Self::CodeEdit => "开发指令",
+            Self::Interview => "需求问答",
         }
     }
 }
@@ -57,6 +65,8 @@ pub struct NativeAppState {
     pub delivered_text: String,
     /// Completed output available from the tray until this process exits.
     pub last_final_result: String,
+    /// Latest interview utterance available for one verbatim delivery in this process.
+    pub last_interview_turn: String,
     pub delivery_target: Option<crate::services::DeliveryTarget>,
     pub auto_paste: bool,
     pub model_provider: ModelProvider,
@@ -96,6 +106,7 @@ impl Default for NativeAppState {
             raw_text: String::new(),
             delivered_text: String::new(),
             last_final_result: String::new(),
+            last_interview_turn: String::new(),
             delivery_target: None,
             auto_paste: true,
             model_provider: ModelProvider::Local,

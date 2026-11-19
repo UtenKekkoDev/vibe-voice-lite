@@ -22,7 +22,7 @@ foreach ($file in @('MODELS.md','MODELS.zh-CN.md','TTS.md')) {
 foreach ($file in @('app-icon.png', 'result-card.png')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "assets/$file") -Destination (Join-Path $bundle 'assets')
 }
-foreach ($file in @('worker.py','qwen_stream.py','runtime.example.json','requirements.txt','Faster-Qwen-LICENSE')) {
+foreach ($file in @('worker.py','audio_output.py','qwen_stream.py','runtime.example.json','requirements.txt','Faster-Qwen-LICENSE')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "tts/$file") -Destination (Join-Path $bundle 'tts')
 }
 Get-ChildItem -LiteralPath (Join-Path $projectRoot 'tts/faster_qwen3_tts') -Filter '*.py' -File |

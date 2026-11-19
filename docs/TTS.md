@@ -38,7 +38,30 @@ The default voice is Serena, with the selected gentle, slightly slower style.
 Each utterance uses the same seed and instruction. Different sentences can still
 have different natural emphasis and pauses. This is not a voice-cloning mode.
 
-Only AI clarification and interview questions are spoken automatically. Normal
+Serena reads AI questions, mode selection prompts, voice selection confirmations and a short receipt after a successful interview summary. Normal
 feedback, final summaries and errors remain text-only. Hold the talk key to
 interrupt speech. The child process is owned by a Windows Job Object and ends
 when the app exits, including during model loading.
+
+Before each question or preview, Serena checks the current Windows default
+playback device. If you switch to headphones between questions, the next one
+uses that device and the loaded model stays in memory.
+
+## Upgrading to a new folder
+
+Exit the old app, extract the new ZIP and copy your old `tts/runtime.json` to the
+new `tts` directory. Keep the new worker scripts. Relative paths in the copied
+configuration now start at the new `tts` directory. If your Python environment
+and model remain in the old app folder, edit both path fields to use their actual
+absolute locations. For example, for an old installation in `D:/Apps/VoiceOld`:
+
+```json
+{
+  "python": "D:/Apps/VoiceOld/.venv-tts/Scripts/python.exe",
+  "model": "D:/Apps/VoiceOld/models/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+}
+```
+
+Preserve your existing `style_instruction` field when editing the two paths.
+With the old environment still present, start the new app and use Settings → test
+question to confirm playback.

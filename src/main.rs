@@ -17,6 +17,7 @@ mod state;
 mod task;
 mod tray;
 mod ui;
+mod voice_mode;
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, WindowLevel};
 use std::fs;

@@ -40,6 +40,8 @@ jobs:
         run: cargo test --locked --all-targets
       - name: Python syntax
         run: python -m compileall -q tts scripts
+      - name: Test playback device routing
+        run: python -m unittest discover -s tts -p test_audio_output.py
       - name: Build
         run: cargo build --locked --release --bin vibe-voice-lite
       - name: Package without models or personal configuration

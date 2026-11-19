@@ -237,14 +237,18 @@ pub fn show(
                         });
 
                         if view.online {
-                            if field(ui, "API Key", &mut view.qwen_key, true) {
+                            let previous_url = view.qwen_url.clone();
+                            if field(ui, "WebSocket 地址", &mut view.qwen_url, false) {
+                                if !qwen_asr::same_credential_origin(&previous_url, &view.qwen_url) {
+                                    view.qwen_key.clear();
+                                }
+                                changes.push(SettingsAction::QwenUrl(view.qwen_url.clone()));
+                            }
+                            if field(ui, "API Key（切换服务器后需重新填写）", &mut view.qwen_key, true) {
                                 changes.push(SettingsAction::QwenKey(view.qwen_key.clone()));
                             }
                             if field(ui, "模型名", &mut view.qwen_model, false) {
                                 changes.push(SettingsAction::QwenModel(view.qwen_model.clone()));
-                            }
-                            if field(ui, "WebSocket 地址", &mut view.qwen_url, false) {
-                                changes.push(SettingsAction::QwenUrl(view.qwen_url.clone()));
                             }
                         } else {
                             let mut dir = view.local_dir.clone();
@@ -290,19 +294,20 @@ pub fn show(
 
                         ui.add_space(10.0);
                         ui.separator();
-                        ui.label(RichText::new("输出").strong());
+                        ui.label(RichText::new("输入模式").strong());
+                        ui.label("单独说“切换第二个”或“第二”可直接切换。也可先说“切换模式”。");
                         let before = view.input_mode;
                         egui::ComboBox::from_id_salt("input_mode")
-                            .selected_text(view.input_mode.label()).show_ui(ui, |ui| {
+                            .selected_text(view.input_mode.numbered_label()).show_ui(ui, |ui| {
                                 for mode in [InputMode::DirectPrompt, InputMode::CodeEdit, InputMode::Interview] {
-                                    ui.selectable_value(&mut view.input_mode, mode, mode.label());
+                                    ui.selectable_value(&mut view.input_mode, mode, mode.numbered_label());
                                 }
                             });
                         if view.input_mode != before {
                             changes.push(SettingsAction::Mode(view.input_mode));
                         }
                         if view.input_mode == InputMode::Interview {
-                            ui.label(format!("按住 {} 回答，每轮一个重点。说“这个先待定”跳过当前问题。出现“可以整理”后仍可补充；单独说“先整理到这里”才会输出已确定和待定事项。", holdkey::label(&view.hold_key)));
+                            ui.label(format!("按住 {} 回答，每轮一个重点。说“这个先待定”跳过当前问题。说“OK，就这样”或“停止”即可收尾，整理已确定和待定事项。说“直接输入”会输出上一段原话。", holdkey::label(&view.hold_key)));
                         }
                         let mut paste = view.auto_paste;
                         if ui.checkbox(&mut paste, "识别后自动粘贴到原窗口").changed() {
@@ -318,7 +323,7 @@ pub fn show(
                             changes.push(SettingsAction::CancelClarification);
                         }
                         if ui
-                            .checkbox(&mut view.tts_enabled, "仅播报需要确认的问题")
+                            .checkbox(&mut view.tts_enabled, "播报提问、模式切换和访谈完成回执")
                             .changed()
                         {
                             changes.push(SettingsAction::Tts(view.tts_enabled));
@@ -345,7 +350,7 @@ pub fn show(
                             ui.label(format!("{}已启用 AI。", view.input_mode.label()));
                         } else {
                             ai_changed |= ui
-                                .checkbox(&mut view.ai.enabled, "普通口述也使用 AI 整理")
+                                .checkbox(&mut view.ai.enabled, "语音听写也使用 AI 整理")
                                 .changed();
                         }
                         {

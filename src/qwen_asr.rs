@@ -25,6 +25,15 @@ pub struct QwenAsrTranscript {
     pub text: String,
 }
 
+/// Credentials belong to a TLS origin. Path and query edits keep the same recipient.
+pub(crate) fn same_credential_origin(previous: &str, next: &str) -> bool {
+    let origin = |value: &str| {
+        let url = url::Url::parse(value.trim()).ok()?;
+        (url.scheme() == "wss" && url.host_str().is_some()).then(|| url.origin())
+    };
+    matches!((origin(previous), origin(next)), (Some(old), Some(new)) if old == new)
+}
+
 pub fn validate_config(config: &QwenAsrConfig) -> Result<()> {
     let api_key = normalize_dashscope_api_key(&config.api_key);
     if api_key.is_empty() {

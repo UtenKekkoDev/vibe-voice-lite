@@ -4,11 +4,12 @@
 use crate::audio::{cancel_recording, recording_level, take_recording_error};
 use crate::config;
 use crate::holdkey;
-use crate::services::{self, FinishInputResult};
+use crate::services::{self, FinishEvent, FinishInputResult};
 use crate::settings::{self, SettingsAction, SettingsView};
 use crate::state::{InputMode, InputState, ModelProvider, NativeAppState};
 use crate::task::TaskControl;
 use crate::tray::{TrayAction, TrayController};
+use crate::voice_mode::{self, ModeCommand};
 use eframe::egui::{self, Align2, Color32, Context, FontId, Pos2, Rect, Stroke, StrokeKind, vec2};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -57,7 +58,9 @@ pub struct VoiceLiteApp {
     state: NativeAppState,
     phase: Phase,
     recording_started_at: Option<Instant>,
-    pending: Option<Receiver<FinishInputResult>>,
+    pending: Option<Receiver<FinishEvent>>,
+    choosing_mode: bool,
+    esc_down: bool,
     active_task: Option<TaskControl>,
     health_pending: Option<Receiver<(bool, String, String)>>,
     model_ready: bool,
@@ -108,7 +111,6 @@ impl eframe::App for VoiceLiteApp {
         self.poll_tray();
         self.demo_tick();
         self.poll_health();
-        self.poll_finish();
         self.poll_speech();
         self.watch_recording();
 
@@ -122,6 +124,7 @@ impl eframe::App for VoiceLiteApp {
         } else {
             false
         };
+        self.poll_finish();
         self.poll_hold_key(settings_focused);
         self.expire_phase();
 
@@ -162,6 +165,8 @@ impl VoiceLiteApp {
             phase: Phase::Idle,
             recording_started_at: None,
             pending: None,
+            choosing_mode: false,
+            esc_down: false,
             active_task: None,
             health_pending: None,
             model_ready: false,
@@ -347,7 +352,16 @@ impl VoiceLiteApp {
         self.pending = None;
         self.active_task = None;
         match received {
-            Ok(result) => self.accept_finish_result(result),
+            Ok(FinishEvent::NoVerbatimText) => {
+                self.set_error("没有可直出的上一段原话。可以说“正文，这句直接输入”。")
+            }
+            Ok(FinishEvent::Mode(command)) => self.handle_mode_command(command),
+            Ok(FinishEvent::Dictation(result)) if self.choosing_mode => {
+                // A successful picker answer is always a Mode event. An ASR
+                // error keeps both the picker and any suspended interview.
+                self.set_error(result.status_message);
+            }
+            Ok(FinishEvent::Dictation(result)) => self.accept_finish_result(*result),
             Err(()) => self.set_error("识别进程意外退出，请重试"),
         }
     }
@@ -362,6 +376,14 @@ impl VoiceLiteApp {
                 self.speech.status = format!("语音不可用：{error}；文字结果仍保留");
                 None
             }
+        }
+    }
+
+    fn speak_for_turn(&mut self, text: &str) {
+        if let Some(id) = self.say(text)
+            && let Ok(mut view) = self.settings_view.lock()
+        {
+            view.latency.attach_speech(id);
         }
     }
 
@@ -381,6 +403,13 @@ impl VoiceLiteApp {
     }
 
     fn cancel_clarification(&mut self) {
+        self.reset_input();
+        self.state.clarification = None;
+        self.state.last_interview_turn.clear();
+    }
+
+    fn reset_input(&mut self) {
+        self.choosing_mode = false;
         self.speech.stop();
         if let Some(task) = self.active_task.take() {
             task.cancel();
@@ -388,9 +417,61 @@ impl VoiceLiteApp {
         self.pending = None;
         cancel_recording();
         self.recording_started_at = None;
-        self.state.clarification = None;
         self.phase = Phase::Idle;
         self.state.input_state = InputState::Idle;
+    }
+
+    fn show_mode_question(&mut self, prompt: &str) {
+        self.choosing_mode = true;
+        self.state.input_state = InputState::Idle;
+        self.phase = Phase::Awaiting;
+        self.result_text = prompt.into();
+        self.paste_note = Some(format!(
+            "按住 {} 回答 · 说“取消”或按 Esc 返回",
+            holdkey::label(&self.state.hold_key)
+        ));
+        self.raise_bar();
+    }
+
+    fn handle_mode_command(&mut self, command: ModeCommand) {
+        match command {
+            ModeCommand::Ask | ModeCommand::Retry => {
+                let prompt = if command == ModeCommand::Ask {
+                    voice_mode::QUESTION
+                } else {
+                    voice_mode::RETRY
+                };
+                self.show_mode_question(prompt);
+                self.speak_for_turn(prompt);
+                return;
+            }
+            ModeCommand::Cancel => {
+                self.reset_input();
+                self.result_text = format!("已取消切换，当前是{}", self.state.input_mode.label());
+            }
+            ModeCommand::Choose(mode) => {
+                let already_selected = self.state.input_mode == mode;
+                self.set_mode(mode);
+                self.state.input_state = InputState::Idle;
+                let receipt = if already_selected {
+                    format!("当前已是{}。", mode.label())
+                } else {
+                    format!("已切换到{}。", mode.label())
+                };
+                self.speak_for_turn(&receipt);
+                self.result_text = receipt;
+            }
+        }
+        self.paste_note = Some(if self.state.clarification.is_some() {
+            "继续上一个问题".into()
+        } else {
+            format!("按住 {} 开始说话", holdkey::label(&self.state.hold_key))
+        });
+        self.phase = Phase::Done {
+            until: Instant::now() + RESULT_LINGER,
+            ok: true,
+        };
+        self.raise_bar();
     }
 
     fn set_auto_paste(&mut self, on: bool) {
@@ -404,13 +485,20 @@ impl VoiceLiteApp {
         if self.state.input_mode != mode {
             self.cancel_clarification();
             self.state.input_mode = mode;
+        } else if self.choosing_mode {
+            self.reset_input();
+            self.restore_question();
+        }
+        if let Ok(mut view) = self.settings_view.lock() {
+            view.input_mode = mode;
         }
         if let Some(tray) = &self.tray {
             tray.set_mode(mode);
         }
     }
 
-    fn accept_finish_result(&mut self, result: FinishInputResult) {
+    fn accept_finish_result(&mut self, mut result: FinishInputResult) {
+        result.auto_paste &= self.state.auto_paste;
         let auto_paste = result.auto_paste;
         let ai_note = result.ai_note.clone();
         let review = result.review_required;
@@ -419,7 +507,7 @@ impl VoiceLiteApp {
             .clarification
             .as_ref()
             .map(|c| c.question.text().to_owned());
-        let spoken = services::spoken_question(&result);
+        let spoken = services::spoken_feedback(&result);
         let display = if ai_note.is_some() {
             result.delivered_text.clone()
         } else {
@@ -449,8 +537,10 @@ impl VoiceLiteApp {
         } else if ai_failed {
             if self.state.input_mode == InputMode::Interview {
                 "AI 整理失败，访谈内容已保留。可以继续补充，或再说“先整理到这里”重试汇总。".into()
-            } else {
+            } else if self.state.clarification.is_some() {
                 "AI 整理失败，回答已保留。可稍后再试，或按 Esc 取消。".into()
+            } else {
+                "AI 整理失败。可在设置的「最近一次转写与输出」中复制原文。".into()
             }
         } else if ok {
             question.clone().or(display).unwrap_or_default()
@@ -469,20 +559,19 @@ impl VoiceLiteApp {
         self.paste_note = Some(if cancelled {
             "未自动粘贴 · 可以开始新的口述".into()
         } else if ai_failed {
-            "AI 服务异常 · 未自动粘贴".into()
+            ai_note
+                .as_deref()
+                .and_then(|note| note.split_once("未自动粘贴："))
+                .map_or_else(
+                    || "未自动粘贴 · 可在设置中查看原因".into(),
+                    |(_, reason)| reason.to_owned(),
+                )
         } else if let Some(footer) = footer {
             footer.into()
         } else if review {
             "AI 仍有待确认项 · 请查看文字结果".into()
         } else if let Some(note) = ai_note.as_deref() {
-            format!(
-                "{} · {delivery}",
-                if note == "AI 已整理" {
-                    "AI 已整理"
-                } else {
-                    "AI 整理失败，已用原文"
-                }
-            )
+            format!("{note} · {delivery}")
         } else {
             delivery.into()
         });
@@ -499,11 +588,8 @@ impl VoiceLiteApp {
                 ok,
             }
         };
-        if let Some(text) = spoken
-            && let Some(id) = self.say(&text)
-            && let Ok(mut view) = self.settings_view.lock()
-        {
-            view.latency.attach_speech(id);
+        if let Some(text) = spoken {
+            self.speak_for_turn(&text);
         }
         self.raise_bar();
     }
@@ -531,14 +617,18 @@ impl VoiceLiteApp {
             return;
         }
         let down = holdkey::is_down(&self.state.hold_key);
-        if self.state.clarification.is_some()
-            && matches!(self.phase, Phase::Awaiting | Phase::Done { .. })
-            && !settings_focused
-            && unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x1B) }
-                < 0
-        {
-            self.cancel_clarification();
+        let esc =
+            unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x1B) } < 0;
+        if esc && !self.esc_down && !settings_focused {
+            if self.choosing_mode {
+                self.handle_mode_command(ModeCommand::Cancel);
+            } else if self.state.clarification.is_some()
+                && matches!(self.phase, Phase::Awaiting | Phase::Done { .. })
+            {
+                self.cancel_clarification();
+            }
         }
+        self.esc_down = esc;
         self.handle_hold_key(down, settings_focused);
     }
 
@@ -618,8 +708,9 @@ impl VoiceLiteApp {
                 self.pending = Some(rx);
                 self.phase = Phase::Processing;
                 let ctx = self.ctx.clone();
+                let choosing_mode = self.choosing_mode;
                 thread::spawn(move || {
-                    let result = services::run_finish_input_work(work, &task);
+                    let result = services::run_finish_input_work(work, &task, choosing_mode);
                     let _ = tx.send(result);
                     ctx.request_repaint();
                 });
@@ -638,13 +729,19 @@ impl VoiceLiteApp {
             _ => false,
         };
         if expired {
-            if let Some(pending) = &self.state.clarification {
-                self.result_text = pending.question.text().to_owned();
-                self.paste_note = Some(question_footer(pending).into());
-                self.phase = Phase::Awaiting;
-            } else {
-                self.phase = Phase::Idle;
-            }
+            self.restore_question();
+        }
+    }
+
+    fn restore_question(&mut self) {
+        if self.choosing_mode {
+            self.show_mode_question(voice_mode::QUESTION);
+        } else if let Some(pending) = &self.state.clarification {
+            self.result_text = pending.question.text().to_owned();
+            self.paste_note = Some(question_footer(pending).into());
+            self.phase = Phase::Awaiting;
+        } else {
+            self.phase = Phase::Idle;
         }
     }
 
@@ -785,6 +882,9 @@ impl VoiceLiteApp {
                     self.model_ready = false;
                 }
                 SettingsAction::QwenKey(key) => {
+                    if let Ok(mut view) = self.settings_view.lock() {
+                        view.qwen_key.clone_from(&key);
+                    }
                     self.state.qwen_api_key = key;
                     self.model_ready = false;
                 }
@@ -793,6 +893,12 @@ impl VoiceLiteApp {
                     self.model_ready = false;
                 }
                 SettingsAction::QwenUrl(url) => {
+                    if !crate::qwen_asr::same_credential_origin(&self.state.qwen_url, &url) {
+                        self.state.qwen_api_key.clear();
+                        if let Ok(mut view) = self.settings_view.lock() {
+                            view.qwen_key.clear();
+                        }
+                    }
                     self.state.qwen_url = url;
                     self.model_ready = false;
                 }
@@ -891,6 +997,15 @@ impl VoiceLiteApp {
                         &self.result_text,
                         note.as_deref(),
                     ),
+                    Phase::Awaiting if self.choosing_mode => paint_card(
+                        painter,
+                        rect,
+                        true,
+                        Some("选择输入模式"),
+                        &shown,
+                        &self.result_text,
+                        note.as_deref(),
+                    ),
                     Phase::Awaiting => paint_card(
                         painter,
                         rect,
@@ -902,7 +1017,7 @@ impl VoiceLiteApp {
                                 }
                                 Some(
                                     crate::ai::FollowUp::Deferred | crate::ai::FollowUp::Supplement,
-                                ) => format!("需求访谈   ·   按住 {key} 补充"),
+                                ) => format!("需求问答   ·   按住 {key} 补充"),
                                 _ => format!("需要确认   ·   按住 {key} 回答"),
                             },
                         ),
@@ -1317,6 +1432,8 @@ mod tests {
             phase: Phase::Idle,
             recording_started_at: None,
             pending: None,
+            choosing_mode: false,
+            esc_down: false,
             active_task: None,
             health_pending: None,
             model_ready: true,
@@ -1333,6 +1450,72 @@ mod tests {
             placed: false,
             geometry: [0.0, 0.0],
         })
+    }
+
+    #[test]
+    fn voice_picker_preserves_the_interview_until_a_different_mode_is_chosen() {
+        let mut app = test_app();
+        app.set_mode(InputMode::CodeEdit);
+        app.accept_finish_result(question_result());
+        app.state.last_final_result = "前一条正文".into();
+        let original = app.state.clarification.as_ref().unwrap().original.clone();
+        let last_raw = app.state.raw_text.clone();
+        for action in [
+            ModeCommand::Cancel,
+            ModeCommand::Choose(InputMode::CodeEdit),
+        ] {
+            app.handle_mode_command(ModeCommand::Ask);
+            app.handle_mode_command(ModeCommand::Retry);
+            assert!(app.choosing_mode);
+            assert!(matches!(app.phase, Phase::Awaiting));
+            assert_eq!(app.result_text, voice_mode::RETRY);
+            app.handle_mode_command(action);
+            if matches!(action, ModeCommand::Choose(_)) {
+                assert_eq!(app.result_text, "当前已是开发指令。");
+            }
+            assert!(!app.choosing_mode);
+            app.restore_question();
+            assert_eq!(app.state.clarification.as_ref().unwrap().original, original);
+            assert!(matches!(app.phase, Phase::Awaiting));
+        }
+        app.handle_mode_command(ModeCommand::Ask);
+        app.handle_mode_command(ModeCommand::Choose(InputMode::Interview));
+        assert_eq!(app.result_text, "已切换到需求问答。");
+        assert_eq!(app.state.input_mode, InputMode::Interview);
+        assert!(app.state.clarification.is_none());
+        assert_eq!(
+            app.settings_view.lock().unwrap().input_mode,
+            InputMode::Interview
+        );
+        let mut reloaded = NativeAppState::default();
+        config::apply(&mut reloaded, &config::snapshot(&app.state));
+        assert_eq!(reloaded.input_mode, InputMode::Interview);
+        assert_eq!(app.state.raw_text, last_raw);
+        assert_eq!(app.state.last_final_result, "前一条正文");
+    }
+
+    #[test]
+    fn direct_choice_of_current_mode_allows_another_recording() {
+        let mut app = test_app();
+        app.state.input_state = InputState::Processing;
+        app.handle_mode_command(ModeCommand::Choose(InputMode::DirectPrompt));
+        assert_eq!(app.state.input_state, InputState::Idle);
+    }
+
+    #[test]
+    fn picker_recovers_after_asr_failure_and_tray_selection_discards_a_late_answer() {
+        let mut app = test_app();
+        app.handle_mode_command(ModeCommand::Ask);
+        app.set_error("没听清");
+        app.restore_question();
+        assert!(app.choosing_mode);
+        assert_eq!(app.result_text, voice_mode::QUESTION);
+        let (tx, rx) = mpsc::channel();
+        app.pending = Some(rx);
+        app.set_mode(InputMode::CodeEdit);
+        assert!(!app.choosing_mode);
+        assert!(tx.send(FinishEvent::Mode(ModeCommand::Cancel)).is_err());
+        assert_eq!(app.state.input_mode, InputMode::CodeEdit);
     }
 
     #[test]
@@ -1354,6 +1537,68 @@ mod tests {
         app.settings_tx.send(SettingsAction::Ai(ai)).unwrap();
         app.drain_settings();
         assert!(app.state.ai.protected_key.is_empty());
+    }
+
+    #[test]
+    fn asr_credentials_stay_with_the_same_tls_origin() {
+        let mut app = test_app();
+        let update = |app: &mut VoiceLiteApp, action| {
+            app.settings_tx.send(action).unwrap();
+            app.drain_settings();
+        };
+        update(
+            &mut app,
+            SettingsAction::QwenUrl("wss://example.org/old".into()),
+        );
+        update(&mut app, SettingsAction::QwenKey("test-only".into()));
+        update(
+            &mut app,
+            SettingsAction::QwenUrl("wss://EXAMPLE.org:443/new".into()),
+        );
+        assert_eq!(app.state.qwen_api_key, "test-only");
+        assert!(!crate::qwen_asr::same_credential_origin(
+            "wss://example.org",
+            "wss://example.org:8443"
+        ));
+        assert!(!crate::qwen_asr::same_credential_origin(
+            "wss://example.org",
+            "invalid"
+        ));
+        update(
+            &mut app,
+            SettingsAction::QwenUrl("wss://another.example.org/asr".into()),
+        );
+        assert!(app.state.qwen_api_key.is_empty());
+        assert!(app.settings_view.lock().unwrap().qwen_key.is_empty());
+    }
+
+    #[test]
+    fn disabling_auto_paste_while_processing_suppresses_delivery() {
+        let mut app = test_app();
+        let mut result = question_result();
+        result.auto_paste = true;
+        result.clarification = None;
+        result.review_required = false;
+        result.ai_note = None;
+        // An empty final result makes unexpected delivery fail without touching the clipboard.
+        result.delivered_text = None;
+        app.set_auto_paste(false);
+        app.accept_finish_result(result);
+        assert_eq!(app.paste_note.as_deref(), Some("自动粘贴已关闭"));
+    }
+
+    #[test]
+    fn first_ai_failure_points_to_the_recoverable_transcript() {
+        let mut app = test_app();
+        app.set_mode(InputMode::CodeEdit);
+        let mut result = question_result();
+        result.clarification = None;
+        result.ai_note = Some("AI 整理失败，网络不可用".into());
+        result.delivered_text = result.raw_text.clone();
+        app.accept_finish_result(result);
+        assert!(app.result_text.contains("复制原文"));
+        assert!(!app.result_text.contains("Esc"));
+        assert_eq!(app.settings_view.lock().unwrap().raw_text, "原始要求");
     }
 
     #[test]
@@ -1561,7 +1806,7 @@ mod tests {
         let mut app = test_app();
         let mut result = question_result();
         result.ai_note = Some("AI 整理失败，格式无效".into());
-        assert!(services::spoken_question(&result).is_none());
+        assert!(services::spoken_feedback(&result).is_none());
         app.accept_finish_result(result);
         assert!(app.state.clarification.is_some());
         assert!(app.result_text.contains("AI 整理失败"));
@@ -1577,7 +1822,10 @@ mod tests {
         app.pending = Some(rx);
         app.cancel_clarification();
         assert!(task.check().is_err());
-        assert!(tx.send(question_result()).is_err());
+        assert!(
+            tx.send(FinishEvent::Dictation(Box::new(question_result())))
+                .is_err()
+        );
         assert!(app.state.clarification.is_none());
         assert!(matches!(app.phase, Phase::Idle));
     }
