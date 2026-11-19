@@ -6,6 +6,7 @@ mod config;
 mod credentials;
 mod holdkey;
 mod icons;
+mod latency;
 mod qwen_asr;
 mod sensevoice;
 mod services;

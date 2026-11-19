@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 pub struct TaskControl {
     cancelled: Arc<AtomicBool>,
     deadline: Instant,
+    pub asr_finished: Arc<OnceLock<Instant>>,
+    pub ai_received: Arc<OnceLock<Instant>>,
 }
 
 impl TaskControl {
@@ -16,6 +18,8 @@ impl TaskControl {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             deadline: Instant::now() + timeout,
+            asr_finished: Arc::default(),
+            ai_received: Arc::default(),
         }
     }
     pub fn cancel(&self) {

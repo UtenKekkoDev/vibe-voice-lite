@@ -41,3 +41,34 @@ jobs:
           path: |
             dist/*.zip
             dist/*.sha256
+
+  publish-preview:
+    needs: windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release preview v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-ci-bundle
+          path: dist
+      - name: Publish the tested Windows preview
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("../Cargo.toml","rb"))["package"]["version"])')
+          tag="v$version"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]
+          [[ "$RELEASE_MESSAGE" == "Release preview $tag" ]]
+          archive=vibe-voice-lite-windows-x64.zip
+          sha256sum -c "$archive.sha256"
+          unzip -tq "$archive"
+          gh release create "$tag" "$archive" "$archive.sha256" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --prerelease --title "Vibe Voice Lite $tag" \
+            --notes-file "../docs/releases/$tag.md"

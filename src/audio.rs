@@ -43,6 +43,36 @@ pub fn cancel_recording() {
 pub fn recording_level() -> f32 {
     f32::from_bits(LEVEL.load(Ordering::Relaxed))
 }
+fn default_input() -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+    let device = cpal::default_host()
+        .default_input_device()
+        .context("没有找到可用的默认麦克风。")?;
+    let config = device
+        .default_input_config()
+        .context("读取默认麦克风配置失败。")?;
+    Ok((device, config))
+}
+
+/// Inspect the input configuration without opening a capture stream.
+pub fn input_status() -> String {
+    match default_input() {
+        Ok((device, config))
+            if matches!(
+                config.sample_format(),
+                SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+            ) =>
+        {
+            format!(
+                "已检测到 {} · {} Hz",
+                device.name().unwrap_or_else(|_| "默认设备".into()),
+                config.sample_rate().0
+            )
+        }
+        Ok((_, config)) => format!("不支持的采样格式 {:?}", config.sample_format()),
+        Err(error) => error.to_string(),
+    }
+}
+
 pub fn start_recording() -> Result<String> {
     let slot = recording_slot();
     let mut guard = slot
@@ -53,14 +83,8 @@ pub fn start_recording() -> Result<String> {
         return Err(anyhow!("当前已经在录音中。"));
     }
 
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| anyhow!("没有找到可用的默认麦克风。"))?;
+    let (device, supported_config) = default_input()?;
     let device_name = device.name().unwrap_or_else(|_| "未知设备".to_string());
-    let supported_config = device
-        .default_input_config()
-        .context("读取默认麦克风配置失败。")?;
     let sample_format = supported_config.sample_format();
     let config: StreamConfig = supported_config.config();
 

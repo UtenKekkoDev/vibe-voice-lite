@@ -5,13 +5,17 @@ use crate::state::{InputMode, InputState, ModelProvider, NativeAppState};
 use crate::task::TaskControl;
 use anyhow::{Context, Result, anyhow};
 use arboard::Clipboard;
-use std::sync::{Mutex, OnceLock};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
+    GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextW, GetWindowThreadProcessId,
 };
-fn delivery_target_slot() -> &'static Mutex<Option<isize>> {
-    static SLOT: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DeliveryTarget {
+    window: isize,
+    process: u32,
+    focus: isize,
+    title_fingerprint: u64,
 }
 #[derive(Clone)]
 pub struct FinishInputSnapshot {
@@ -66,8 +70,10 @@ pub fn begin_input(state: &mut NativeAppState) {
         state.status_message = "请先配置并检查识别模型。".into();
         return;
     }
-    // Each explicit hold selects the current editor, including follow-up answers.
-    remember_delivery_target_window();
+    // Follow-up answers belong to the original editor even if spoken in another window.
+    if state.clarification.is_none() {
+        state.delivery_target = current_delivery_target();
+    }
     match start_recording() {
         Ok(info) => {
             state.input_state = InputState::Recording;
@@ -194,6 +200,7 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
 
     match result {
         Ok((raw_text, mut delivered_text, segments, delivery_message)) => {
+            let _ = task.asr_finished.set(std::time::Instant::now());
             let mut clarification = None;
             let mut review_required = false;
             let mut cancelled = false;
@@ -223,6 +230,14 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
                         Some(
                             if cancelled {
                                 "已取消整理"
+                            } else if clarification.as_ref().is_some_and(|next| {
+                                !matches!(next.question, crate::ai::FollowUp::Question(_))
+                                    && snapshot
+                                        .clarification
+                                        .as_ref()
+                                        .is_some_and(|previous| previous.question == next.question)
+                            }) {
+                                "AI 等待补充"
                             } else if review_required {
                                 "AI 需要确认"
                             } else {
@@ -235,14 +250,14 @@ pub fn run_finish_input_work(work: FinishInputWork, task: &TaskControl) -> Finis
                         // A failed/malformed AI response never approves an answer.
                         review_required = true;
                         if let Some(c) = &snapshot.clarification {
-                            clarification = Some(c.continue_with(&raw_text, c.question.clone()));
+                            clarification = Some(c.after_failure(&raw_text));
                             delivered_text.clear();
                         } else if snapshot.input_mode == InputMode::Interview {
                             clarification = Some(next_clarification(
                                 None,
                                 &raw_text,
                                 InputMode::Interview,
-                                "请继续说明你希望实现的目标。".into(),
+                                crate::ai::FollowUp::Supplement,
                             ));
                             delivered_text.clear();
                         } else {
@@ -309,7 +324,7 @@ fn next_clarification(
     previous: Option<&crate::ai::Clarification>,
     answer: &str,
     mode: InputMode,
-    question: String,
+    question: crate::ai::FollowUp,
 ) -> crate::ai::Clarification {
     match previous {
         Some(c) => c.continue_with(answer, question),
@@ -379,7 +394,7 @@ fn qwen_config_from_snapshot(snapshot: &FinishInputSnapshot) -> QwenAsrConfig {
     }
 }
 
-pub fn auto_paste_result(result: &FinishInputResult) -> Result<()> {
+pub fn auto_paste_result(result: &FinishInputResult, target: Option<DeliveryTarget>) -> Result<()> {
     if !result.review_required && result.clarification.is_none() && result.auto_paste {
         let text = result
             .delivered_text
@@ -388,7 +403,7 @@ pub fn auto_paste_result(result: &FinishInputResult) -> Result<()> {
             .context("没有可粘贴的最终结果")?;
         paste_without_refocusing(
             text,
-            ensure_delivery_target_active,
+            || check_target(target, current_delivery_target()),
             write_clipboard,
             simulate_paste_shortcut,
         )?;
@@ -428,6 +443,13 @@ pub fn apply_finish_result(
         && !result.review_required
         && result.clarification.is_none()
     {
+        if let Some(text) = result
+            .delivered_text
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            text.clone_into(&mut state.last_final_result);
+        }
         deliver(&result).err()
     } else {
         None
@@ -459,12 +481,12 @@ pub fn spoken_question(result: &FinishInputResult) -> Option<String> {
     result
         .clarification
         .as_ref()
-        .map(|c| c.question.trim())
+        .map(|c| c.question.text().trim())
         .filter(|q| !q.is_empty())
         .map(str::to_owned)
 }
 
-fn write_clipboard(text: &str) -> Result<()> {
+pub fn write_clipboard(text: &str) -> Result<()> {
     let mut clipboard = Clipboard::new().context("打开系统剪贴板失败。")?;
     clipboard
         .set_text(text.to_string())
@@ -535,33 +557,42 @@ fn normalize_text(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub fn remember_delivery_target_window() {
-    #[cfg(target_os = "windows")]
-    {
-        let hwnd = unsafe { GetForegroundWindow() };
-        let mut pid = 0;
-        if !hwnd.is_null() {
-            unsafe {
-                GetWindowThreadProcessId(hwnd, &mut pid);
-            }
-        }
-        if let Ok(mut guard) = delivery_target_slot().lock() {
-            *guard = new_delivery_target(hwnd as isize, pid, std::process::id());
-        }
+fn current_delivery_target() -> Option<DeliveryTarget> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() {
+        return None;
     }
+    let mut pid = 0;
+    let thread = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+    if thread == 0 || pid == 0 || pid == std::process::id() {
+        return None;
+    }
+    let mut info: GUITHREADINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if unsafe { GetGUIThreadInfo(thread, &mut info) } == 0 || info.hwndFocus.is_null() {
+        return None;
+    }
+    // Many tabbed editors share a top-level HWND. Keep only a fingerprint of its caption.
+    let mut title = [0u16; 1024];
+    let len = unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) } as usize;
+    let mut hash = DefaultHasher::new();
+    title[..len].hash(&mut hash);
+    if unsafe { GetForegroundWindow() } != hwnd {
+        return None;
+    }
+    Some(DeliveryTarget {
+        window: hwnd as isize,
+        process: pid,
+        focus: info.hwndFocus as isize,
+        title_fingerprint: hash.finish(),
+    })
 }
 
-fn new_delivery_target(hwnd: isize, pid: u32, own_pid: u32) -> Option<isize> {
-    (hwnd != 0 && pid != 0 && pid != own_pid).then_some(hwnd)
-}
-
-fn ensure_delivery_target_active() -> Result<()> {
-    let target = delivery_target_slot().lock().ok().and_then(|guard| *guard);
-    let foreground = unsafe { GetForegroundWindow() } as isize;
-    if !target.is_some_and(|hwnd| hwnd == foreground && unsafe { IsWindow(hwnd as _) } != 0) {
+fn check_target(expected: Option<DeliveryTarget>, current: Option<DeliveryTarget>) -> Result<()> {
+    if expected.is_none() || expected != current {
         crate::config::lifecycle("paste skipped: target missing or changed");
         return Err(anyhow!(
-            "目标未选择或已切换窗口；结果已复制，请在输入框按 Ctrl+V"
+            "原输入位置已改变或无法确认；结果已复制，请在输入框按 Ctrl+V"
         ));
     }
     Ok(())
@@ -570,6 +601,56 @@ fn ensure_delivery_target_active() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Interactive runner supplies its own disposable editor, title prefix, and control directory.
+    #[test]
+    #[ignore = "requires a visible disposable paste fixture and the system clipboard"]
+    fn desktop_paste_fixture() {
+        use std::{
+            fs,
+            path::PathBuf,
+            thread,
+            time::{Duration, Instant},
+        };
+        let dir = PathBuf::from(std::env::var_os("VIBE_PASTE_FIXTURE").expect("fixture directory"));
+        let prefix = dir.file_name().unwrap().to_str().unwrap();
+        assert!(prefix.starts_with("VibePasteFixture-"));
+        let expected_title = |target: DeliveryTarget| {
+            let mut text = [0u16; 256];
+            let len =
+                unsafe { GetWindowTextW(target.window as _, text.as_mut_ptr(), text.len() as i32) };
+            String::from_utf16_lossy(&text[..len as usize]).starts_with(prefix)
+        };
+        let target = current_delivery_target()
+            .filter(|t| expected_title(*t))
+            .expect("test window must be foreground");
+        fs::write(dir.join("ready"), []).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !dir.join("send").exists() {
+            assert!(Instant::now() < deadline, "fixture handshake timed out");
+            thread::sleep(Duration::from_millis(30));
+        }
+        assert!(
+            current_delivery_target().is_some_and(expected_title),
+            "lost the disposable test window"
+        );
+        let mut sample = result(InputState::Success);
+        sample.delivered_text = Some("临时测试文本 123".into());
+        let delivered = auto_paste_result(&sample, Some(target));
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn GetClipboardSequenceNumber() -> u32;
+        }
+        fs::write(
+            dir.join("clipboard-sequence"),
+            unsafe { GetClipboardSequenceNumber() }.to_string(),
+        )
+        .unwrap();
+        if dir.join("expect-switch").exists() {
+            assert!(delivered.unwrap_err().to_string().contains("原输入位置"));
+        } else {
+            delivered.unwrap();
+        }
+    }
     #[test]
     #[ignore = "requires local ASR model and loopback mock AI"]
     fn real_pipeline_keeps_asking_and_recovers_from_ai_failure() {
@@ -666,9 +747,19 @@ mod tests {
                 last_recording_info: String::new(),
                 snapshot,
             };
-            let result =
-                run_finish_input_work(work, &TaskControl::new(std::time::Duration::from_secs(30)));
+            let task = TaskControl::new(std::time::Duration::from_secs(30));
+            let start = std::time::Instant::now();
+            let result = run_finish_input_work(work, &task);
             assert_eq!(result.input_state, InputState::Success);
+            let asr = *task.asr_finished.get().expect("ASR completion stamp");
+            let ai = *task.ai_received.get().expect("AI response stamp");
+            assert!(start <= asr && asr <= ai);
+            eprintln!(
+                "turn={} asr_ms={} loopback_ai_ms={}",
+                step + 1,
+                (asr - start).as_millis(),
+                (ai - start).as_millis()
+            );
             let delivered = std::cell::Cell::new(false);
             if step < 3 {
                 assert!(result.review_required);
@@ -771,9 +862,34 @@ mod tests {
             .is_ok()
         );
         assert!(sent.get());
-        assert_eq!(new_delivery_target(42, 7, 7), None);
-        assert_eq!(new_delivery_target(42, 8, 7), Some(42));
-        assert_eq!(new_delivery_target(0, 0, 7), None);
+        let original = DeliveryTarget {
+            window: 42,
+            process: 8,
+            focus: 43,
+            title_fingerprint: 1,
+        };
+        assert!(check_target(Some(original), Some(original)).is_ok());
+        for changed in [
+            DeliveryTarget {
+                window: 44,
+                ..original
+            },
+            DeliveryTarget {
+                process: 9,
+                ..original
+            },
+            DeliveryTarget {
+                focus: 45,
+                ..original
+            },
+            DeliveryTarget {
+                title_fingerprint: 2,
+                ..original
+            },
+        ] {
+            assert!(check_target(Some(original), Some(changed)).is_err());
+        }
+        assert!(check_target(None, None).is_err());
     }
     fn result(state: InputState) -> FinishInputResult {
         FinishInputResult {
@@ -801,7 +917,32 @@ mod tests {
         });
         assert!(error.unwrap().contains("结果已保留"));
         assert_eq!(state.raw_text, "添加 refresh token");
+        assert_eq!(state.last_final_result, "添加 refresh token");
         assert_eq!(state.input_state, InputState::Success);
+    }
+    #[test]
+    fn recovery_keeps_only_the_last_completed_result_in_memory() {
+        let mut state = NativeAppState::default();
+        let mut first = result(InputState::Success);
+        first.auto_paste = false;
+        first.delivered_text = Some("第一行\n第二行".into());
+        apply_finish_result(&mut state, first, |_| Ok(()));
+        let kept = state.last_final_result.clone();
+        assert_eq!(kept, "第一行\n第二行");
+        let mut pending = result(InputState::Success);
+        pending.review_required = true;
+        pending.delivered_text = Some("未确认的草稿".into());
+        apply_finish_result(&mut state, pending, |_| panic!("pending"));
+        apply_finish_result(&mut state, result(InputState::Error), |_| panic!("error"));
+        let mut cancelled = result(InputState::Success);
+        cancelled.delivered_text = Some(String::new());
+        apply_finish_result(&mut state, cancelled, |_| Ok(()));
+        assert_eq!(state.last_final_result, kept);
+        let mut restored = NativeAppState::default();
+        crate::config::apply(&mut restored, &crate::config::snapshot(&state));
+        assert!(restored.last_final_result.is_empty());
+        apply_finish_result(&mut state, result(InputState::Success), |_| Ok(()));
+        assert_eq!(state.last_final_result, "添加 refresh token");
     }
     #[test]
     fn clarification_retains_context_skips_paste_and_clears_after_answer() {
@@ -836,7 +977,7 @@ mod tests {
                 state.clarification.as_ref(),
                 "还没说明白",
                 InputMode::CodeEdit,
-                format!("第 {i} 轮问题？"),
+                crate::ai::FollowUp::Question(format!("第 {i} 轮问题？")),
             ));
             assert_eq!(spoken_question(&answer), Some(format!("第 {i} 轮问题？")));
             apply_finish_result(&mut state, answer, |_| {
@@ -859,7 +1000,7 @@ mod tests {
     fn empty_final_result_never_reports_paste_success() {
         let mut empty = result(InputState::Success);
         empty.delivered_text = Some("  ".into());
-        assert!(auto_paste_result(&empty).is_err());
+        assert!(auto_paste_result(&empty, None).is_err());
     }
     #[test]
     fn paste_chord_is_one_complete_virtual_key_batch() {

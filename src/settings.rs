@@ -32,6 +32,7 @@ pub enum SettingsAction {
 pub struct SettingsView {
     pub tts_enabled: bool,
     pub tts_status: String,
+    pub latency: crate::latency::LatencyHistory,
     pub clarifying: bool,
     pub ai: crate::ai::AiConfig,
     pub ai_status: String,
@@ -47,6 +48,7 @@ pub struct SettingsView {
     pub qwen_url: String,
     pub status: String,
     pub checking: bool,
+    pub microphone: String,
     pub save_warning: Option<String>,
     pending_browse: Option<Receiver<Option<String>>>,
 }
@@ -56,6 +58,7 @@ impl SettingsView {
         Self {
             tts_enabled: state.tts_enabled,
             tts_status: String::new(),
+            latency: Default::default(),
             clarifying: state.clarification.is_some(),
             ai: state.ai.clone(),
             ai_status: state.ai_status.clone(),
@@ -71,6 +74,7 @@ impl SettingsView {
             qwen_url: state.qwen_url.clone(),
             status: "尚未检查模型。".to_string(),
             checking: false,
+            microphone: "正在检查默认输入设备…".into(),
             save_warning: None,
             pending_browse: None,
         }
@@ -161,6 +165,29 @@ pub fn show(
                         }
                         ui.add_space(14.0);
 
+                        ui.label(RichText::new("使用前检查").strong());
+                        egui::Grid::new("readiness").num_columns(2).max_col_width((ui.available_width() - 90.0).max(160.0)).spacing([12.0, 5.0]).show(ui, |ui| {
+                            ui.label("麦克风");
+                            ui.label(&view.microphone);
+                            ui.end_row();
+                            ui.label(if view.online { "在线识别" } else { "本地识别" });
+                            ui.label(&view.status);
+                            ui.end_row();
+                            ui.label("AI 整理");
+                            match view.ai.check_service() {
+                                Ok(_) => ui.label("配置已填写 · 调用时验证服务"),
+                                Err(error) => ui.label(format!("待配置 · {error}")),
+                            };
+                            ui.end_row();
+                            ui.label("语音播报");
+                            ui.label(if view.tts_enabled { view.tts_status.as_str() } else { "已关闭" });
+                            ui.end_row();
+                        });
+                        if ui.add_enabled(!view.checking, egui::Button::new("重新检查设备和识别")).clicked() {
+                            changes.push(SettingsAction::Check);
+                        }
+                        ui.add_space(10.0);
+                        ui.separator();
                         ui.label(RichText::new("触发键").strong());
                         let mut selected = view.hold_key.clone();
                         egui::ComboBox::from_id_salt("hold_key_combo")
@@ -275,7 +302,7 @@ pub fn show(
                             changes.push(SettingsAction::Mode(view.input_mode));
                         }
                         if view.input_mode == InputMode::Interview {
-                            ui.label(format!("每次只问一个重点。按住 {} 回答。单独说“先整理到这里”结束并输出已确定和待定事项。切换模式或 Esc 取消当前访谈。", holdkey::label(&view.hold_key)));
+                            ui.label(format!("按住 {} 回答，每轮一个重点。说“这个先待定”跳过当前问题。出现“可以整理”后仍可补充；单独说“先整理到这里”才会输出已确定和待定事项。", holdkey::label(&view.hold_key)));
                         }
                         let mut paste = view.auto_paste;
                         if ui.checkbox(&mut paste, "识别后自动粘贴到原窗口").changed() {
@@ -368,6 +395,7 @@ pub fn show(
                         if !view.ai_status.is_empty() {
                             ui.label(&view.ai_status);
                         }
+                        view.latency.show(ui);
                         if !view.raw_text.is_empty() {
                             ui.collapsing(
                                 "最近一次转写与输出（可选中复制）",

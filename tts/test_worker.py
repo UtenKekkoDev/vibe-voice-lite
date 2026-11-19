@@ -32,11 +32,13 @@ try:
     wait(q,'stopped',2)
     assert not any(e['event']=='started' and e['id']==1 for e in log)
     send(p,cmd='speak',id=3,text='需要确认一下，你说的是访问令牌过期，还是刷新令牌过期？')
-    wait(q,'started',3)
+    mark3 = wait(q,'first_output',3)
+    assert mark3['counter'] > 0 and mark3['first_playback']
     send(p,cmd='stop',id=4)
     wait(q,'stopped',4,timeout=3)
     send(p,cmd='speak',id=5,text='已整理完成。')
-    wait(q,'started',5)
+    mark5 = wait(q,'first_output',5)
+    assert mark5['counter'] > mark3['counter'] and not mark5['first_playback']
     done=wait(q,'done',5)
     assert done['underrun_frames']==0 and done['driver_errors']==0,done
     assert not any(e['event']=='done' and e['id']==3 for e in log)

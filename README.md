@@ -22,8 +22,8 @@ Windows 上的按住说话工具：语音转写、AI 整理开发需求，以及
 
 1. 托盘选择 **需求访谈（逐步提问）**。
 2. 按住右 Ctrl 说出目标，例如“我想做个待办工具，帮我理清需求”。
-3. 听完一个问题后，继续按住右 Ctrl 回答。可以说“暂时不定，先跳过”。
-4. 单独说 **“先整理到这里”**，结束并输出“已确定”“待定”两部分。
+3. 听完一个问题后，继续按住右 Ctrl 回答。单独说 **“这个先待定”** 可搁置当前问题，之后也可以主动补充决定。
+4. 看到 **“可以整理了”** 后，仍可继续补充。随时单独说 **“先整理到这里”**，才会结束并输出“已确定”“待定”两部分。
 
 - **取消这次整理 / 先不处理**：在等待补充时取消，不生成最终总结。
 - **Esc**：在等待回答时取消。录音或处理期间并非全局取消键。
@@ -31,11 +31,15 @@ Windows 上的按住说话工具：语音转写、AI 整理开发需求，以及
 - **切换模式 / 退出程序**：取消本次对话。访谈内容仅保存在当前进程内。
 - 单独说“停止”目前不是固定控制口令。
 
-启用自动粘贴时，只有最终结果会写入剪贴板并发送 Ctrl+V。若处理期间切换窗口或仍按着修饰键，会跳过自动发送；已复制的结果可手动 Ctrl+V。输入框是否接受快捷键取决于目标软件及权限，界面不会把按键发送等同于确认粘贴成功。
+启用自动粘贴后，程序检查首轮口述时的前台窗口、焦点和标题。目标改变时会跳过发送快捷键。部分编辑器和网页会复用同一窗口与焦点，因此仍需在目标输入框确认结果。随时从托盘选择 **复制上次结果**，即可取回最近一次完整正文并手动粘贴。未完的访谈和识别失败不会覆盖这条记录。退出会清除程序内存中的副本，已复制的内容由 Windows 剪贴板管理。
+
+设置中的耗时记录保留最近 8 轮，按松开说话键后的识别完成、AI 响应与 TTS 首次向音频设备输出非静音数据分段查看。未经过的阶段留空。记录仅驻留在本次会话的内存中。
 
 ## 安装与模型
 
-前往 [Windows 构建列表](https://github.com/UtenKekkoDev/vibe-voice-lite/actions/workflows/ci.yml?query=branch%3Amain)，打开最近一次成功的 main 构建，在 **Artifacts** 下载 **windows-ci-bundle**（需登录 GitHub）。解开外层压缩包，再解压里面的 `vibe-voice-lite-windows-x64.zip`，运行 `vibe-voice-lite.exe`。正式版会列在 [Releases](https://github.com/UtenKekkoDev/vibe-voice-lite/releases)。
+**[下载 Windows x64 预览版 0.2.0-preview.1](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/download/v0.2.0-preview.1/vibe-voice-lite-windows-x64.zip)** · [版本说明和 SHA-256](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/tag/v0.2.0-preview.1)
+
+解压整个 ZIP，双击 `vibe-voice-lite.exe`。首次启动会打开设置，显示默认麦克风、所选识别方式、AI 接口配置和语音后台状态。先配置一种识别方式即可开始普通口述，AI 与 TTS 可按需开启。
 
 需要 Windows 10/11 x64、麦克风、识别模型，以及 [Microsoft Visual C++ x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)。当前构建没有数字签名，**不包含模型权重、API Key、Python 或 CUDA 环境**。
 

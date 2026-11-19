@@ -28,5 +28,5 @@ Get-ChildItem -LiteralPath (Join-Path $projectRoot 'tts/faster_qwen3_tts') -Filt
 $zip = "$bundle.zip"
 Compress-Archive -LiteralPath $bundle -DestinationPath $zip
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-"$hash  $([IO.Path]::GetFileName($zip))" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
+[IO.File]::WriteAllText("$zip.sha256", "$hash  $([IO.Path]::GetFileName($zip))`n", [Text.Encoding]::ASCII)
 Write-Output $zip

@@ -44,7 +44,12 @@ pub fn default_model_dir() -> PathBuf {
         return release_official_models;
     }
 
-    development_model_dir()
+    let development = development_model_dir();
+    if development.is_dir() {
+        development
+    } else {
+        release_default
+    }
 }
 
 pub fn prepare_and_probe(model_dir: &Path) -> Result<SenseVoiceProbe> {

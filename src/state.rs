@@ -55,6 +55,9 @@ pub struct NativeAppState {
     pub status_message: String,
     pub raw_text: String,
     pub delivered_text: String,
+    /// Completed output available from the tray until this process exits.
+    pub last_final_result: String,
+    pub delivery_target: Option<crate::services::DeliveryTarget>,
     pub auto_paste: bool,
     pub model_provider: ModelProvider,
     pub local_model_dir: String,
@@ -92,6 +95,8 @@ impl Default for NativeAppState {
             status_message: DEFAULT_STATUS_MESSAGE.to_string(),
             raw_text: String::new(),
             delivered_text: String::new(),
+            last_final_result: String::new(),
+            delivery_target: None,
             auto_paste: true,
             model_provider: ModelProvider::Local,
             local_model_dir: sensevoice::default_model_dir()

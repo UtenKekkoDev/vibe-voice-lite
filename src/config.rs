@@ -13,6 +13,10 @@ fn path() -> PathBuf {
         .join("settings.json")
 }
 
+pub fn has_saved_settings() -> bool {
+    path().is_file()
+}
+
 pub fn snapshot(s: &NativeAppState) -> Value {
     json!({"version":2, "hold_key":s.hold_key, "auto_paste":s.auto_paste,
         "code_mode":s.input_mode == InputMode::CodeEdit,
@@ -171,6 +175,7 @@ mod tests {
         if let Ok(phase) = std::env::var("VIBE_KEY_TEST_PHASE") {
             match phase.as_str() {
                 "write" => {
+                    assert!(!has_saved_settings());
                     let mut state = NativeAppState::default();
                     state.ai.protected_key =
                         crate::credentials::protect(TEST_KEY, &state.ai.endpoint).unwrap();
@@ -178,6 +183,7 @@ mod tests {
                     assert!(!fs::read_to_string(path()).unwrap().contains(TEST_KEY));
                 }
                 "read" => {
+                    assert!(has_saved_settings());
                     let mut state = NativeAppState::default();
                     load(&mut state).unwrap();
                     assert_eq!(state.ai.api_key, TEST_KEY);

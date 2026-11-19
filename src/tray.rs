@@ -10,6 +10,7 @@ pub enum TrayAction {
     Settings,
     Mode(InputMode),
     ToggleAutoPaste,
+    CopyLastResult,
 }
 
 pub struct TrayController {
@@ -24,6 +25,7 @@ pub struct TrayController {
     direct_item: CheckMenuItem,
     interview_item: CheckMenuItem,
     paste_item: CheckMenuItem,
+    copy_item: MenuItem,
 }
 
 impl TrayController {
@@ -57,6 +59,7 @@ impl TrayController {
             None,
         );
         let paste = CheckMenuItem::with_id("lite.paste", "自动粘贴", true, auto_paste, None);
+        let copy = MenuItem::with_id("lite.copy", "复制上次结果", false, None);
         let quit = MenuItem::with_id("lite.quit", "退出", true, None);
         let separator = PredefinedMenuItem::separator();
         let menu = Menu::new();
@@ -67,6 +70,7 @@ impl TrayController {
             &code,
             &interview,
             &paste,
+            &copy,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -105,6 +109,7 @@ impl TrayController {
             direct_item: direct,
             interview_item: interview,
             paste_item: paste,
+            copy_item: copy,
         })
     }
 
@@ -118,6 +123,19 @@ impl TrayController {
 
     pub fn set_auto_paste(&self, on: bool) {
         self.paste_item.set_checked(on);
+    }
+
+    pub fn enable_copy(&self) {
+        self.copy_item.set_enabled(true);
+        self.copy_item.set_text("复制上次结果");
+    }
+
+    pub fn show_copy_status(&self, copied: bool) {
+        self.copy_item.set_text(if copied {
+            "复制上次结果（已复制）"
+        } else {
+            "复制上次结果（剪贴板不可用，点此重试）"
+        });
     }
 
     pub fn poll(&self) -> Option<TrayAction> {
@@ -136,6 +154,9 @@ impl TrayController {
             }
             if event.id == self.paste_id {
                 return Some(TrayAction::ToggleAutoPaste);
+            }
+            if event.id == self.copy_item.id() {
+                return Some(TrayAction::CopyLastResult);
             }
         }
         None

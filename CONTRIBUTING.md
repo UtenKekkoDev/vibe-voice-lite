@@ -37,6 +37,8 @@ the official SenseVoice directory (including `test_wavs/zh.wav`) and
 `VIBE_TTS_RUNTIME_DIR` to a configured `tts` directory, then run named ignored
 tests with `-- --ignored --test-threads=1`. GPU/speech tests play synthetic audio.
 
+For desktop paste verification, run `./scripts/test-desktop-paste.ps1` from a Windows desktop with Edge installed. The fixture opens disposable native and browser inputs.
+
 Live AI tests require the separate explicit `VIBE_TEST_LIVE_AI=1` flag and a
 `VIBE_CONFIG_DIR` containing your locally configured settings. They send
 synthetic test phrases to your chosen provider and may incur API usage.
@@ -45,6 +47,13 @@ Never run them with credentials stored in repository files or CI secrets.
 Before publication, run `python scripts/audit_release.py` against the staged
 Git index. It is a heuristic check, not a comprehensive security audit. Keep
 personal settings, TTS runtime paths, model weights and recordings out of Git.
+
+## Publishing a Windows preview
+
+Update the Cargo version and lockfile to `X.Y.Z-preview.N`, and add
+`docs/releases/vX.Y.Z-preview.N.md`. A push to main whose entire head commit
+message is `Release preview vX.Y.Z-preview.N` publishes that version only after
+Windows CI succeeds. The release uses the ZIP and checksum from the same run.
 
 ## Pull Request Checklist
 

@@ -59,7 +59,7 @@ pub struct VoiceLiteApp {
     recording_started_at: Option<Instant>,
     pending: Option<Receiver<FinishInputResult>>,
     active_task: Option<TaskControl>,
-    health_pending: Option<Receiver<(bool, String)>>,
+    health_pending: Option<Receiver<(bool, String, String)>>,
     model_ready: bool,
     tray: Option<TrayController>,
     settings_open: bool,
@@ -147,6 +147,7 @@ impl eframe::App for VoiceLiteApp {
 impl VoiceLiteApp {
     pub fn new(ctx: &Context) -> Self {
         let mut state = NativeAppState::default();
+        let first_launch = !config::has_saved_settings();
         let load_error = config::load(&mut state).err();
         let (settings_tx, settings_rx) = mpsc::channel();
         let view = Arc::new(Mutex::new(SettingsView::from_state(&state)));
@@ -165,7 +166,7 @@ impl VoiceLiteApp {
             health_pending: None,
             model_ready: false,
             tray: None,
-            settings_open: false,
+            settings_open: first_launch,
             settings_view: view,
             settings_tx,
             settings_rx,
@@ -246,6 +247,7 @@ impl VoiceLiteApp {
             TrayAction::Settings => self.open_settings(),
             TrayAction::Mode(mode) => self.set_mode(mode),
             TrayAction::ToggleAutoPaste => self.set_auto_paste(!self.state.auto_paste),
+            TrayAction::CopyLastResult => self.copy_last_result(),
         }
         if let Ok(mut view) = self.settings_view.lock() {
             view.input_mode = self.state.input_mode;
@@ -265,6 +267,31 @@ impl VoiceLiteApp {
         }
     }
 
+    fn copy_last_result(&mut self) {
+        if self.state.last_final_result.is_empty() {
+            return;
+        }
+        let copied = services::write_clipboard(&self.state.last_final_result).is_ok();
+        if let Some(tray) = &self.tray {
+            tray.show_copy_status(copied);
+        }
+        if self.state.clarification.is_none()
+            && matches!(self.phase, Phase::Idle | Phase::Done { .. })
+        {
+            self.result_text.clone_from(&self.state.last_final_result);
+            self.paste_note = Some(if copied {
+                "上次结果已复制 · 可按 Ctrl+V 粘贴".into()
+            } else {
+                "剪贴板不可用 · 从托盘再次复制".into()
+            });
+            self.phase = Phase::Done {
+                until: Instant::now() + if copied { RESULT_LINGER } else { ERROR_LINGER },
+                ok: true,
+            };
+            self.raise_bar();
+        }
+    }
+
     fn start_health_check(&mut self, full: bool) {
         if let Ok(mut view) = self.settings_view.lock() {
             view.checking = true;
@@ -276,7 +303,8 @@ impl VoiceLiteApp {
         let ctx = self.ctx.clone();
         thread::spawn(move || {
             let (ok, message) = settings::probe(&state, full);
-            let _ = tx.send((ok, message));
+            let mic = crate::audio::input_status();
+            let _ = tx.send((ok, message, mic));
             ctx.request_repaint();
         });
     }
@@ -285,10 +313,14 @@ impl VoiceLiteApp {
         let Some(rx) = self.health_pending.as_ref() else {
             return;
         };
-        let (ok, message) = match rx.try_recv() {
+        let (ok, message, microphone) = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => (false, "模型检查意外结束，请重新检查。".into()),
+            Err(TryRecvError::Disconnected) => (
+                false,
+                "模型检查意外结束，请重新检查。".into(),
+                "请重新检查设备".into(),
+            ),
         };
         self.health_pending = None;
         self.model_ready = ok;
@@ -296,6 +328,7 @@ impl VoiceLiteApp {
         if let Ok(mut view) = self.settings_view.lock() {
             view.checking = false;
             view.status = message;
+            view.microphone = microphone;
         }
         if !ok && !self.settings_open {
             self.open_settings();
@@ -319,11 +352,16 @@ impl VoiceLiteApp {
         }
     }
 
-    fn say(&mut self, text: &str) {
-        if self.state.tts_enabled
-            && let Err(error) = self.speech.speak(text)
-        {
-            self.speech.status = format!("语音不可用：{error}；文字结果仍保留");
+    fn say(&mut self, text: &str) -> Option<u64> {
+        if !self.state.tts_enabled {
+            return None;
+        }
+        match self.speech.speak(text) {
+            Ok(request) => Some(request),
+            Err(error) => {
+                self.speech.status = format!("语音不可用：{error}；文字结果仍保留");
+                None
+            }
         }
     }
 
@@ -333,6 +371,9 @@ impl VoiceLiteApp {
             config::lifecycle("tts error; text retained");
         }
         if let Ok(mut view) = self.settings_view.lock() {
+            for mark in self.speech.output_times.drain(..) {
+                view.latency.first_output(mark);
+            }
             view.tts_status = self.speech.status.clone();
             view.tts_enabled = self.state.tts_enabled;
             view.clarifying = self.state.clarification.is_some();
@@ -373,15 +414,26 @@ impl VoiceLiteApp {
         let auto_paste = result.auto_paste;
         let ai_note = result.ai_note.clone();
         let review = result.review_required;
-        let question = result.clarification.as_ref().map(|c| c.question.clone());
+        let footer = result.clarification.as_ref().map(question_footer);
+        let question = result
+            .clarification
+            .as_ref()
+            .map(|c| c.question.text().to_owned());
         let spoken = services::spoken_question(&result);
         let display = if ai_note.is_some() {
             result.delivered_text.clone()
         } else {
             result.raw_text.clone()
         };
-        let paste_error =
-            services::apply_finish_result(&mut self.state, result, services::auto_paste_result);
+        let target = self.state.delivery_target;
+        let paste_error = services::apply_finish_result(&mut self.state, result, |result| {
+            services::auto_paste_result(result, target)
+        });
+        if !self.state.last_final_result.is_empty()
+            && let Some(tray) = &self.tray
+        {
+            tray.enable_copy();
+        }
         let ok = self.state.input_state == InputState::Success;
         if let Ok(mut view) = self.settings_view.lock() {
             view.raw_text = self.state.raw_text.clone();
@@ -395,7 +447,11 @@ impl VoiceLiteApp {
         self.result_text = if cancelled {
             "已取消本次整理".into()
         } else if ai_failed {
-            "AI 整理失败，回答已保留。可稍后再试，或按 Esc 取消。".into()
+            if self.state.input_mode == InputMode::Interview {
+                "AI 整理失败，访谈内容已保留。可以继续补充，或再说“先整理到这里”重试汇总。".into()
+            } else {
+                "AI 整理失败，回答已保留。可稍后再试，或按 Esc 取消。".into()
+            }
         } else if ok {
             question.clone().or(display).unwrap_or_default()
         } else {
@@ -404,7 +460,7 @@ impl VoiceLiteApp {
         let delivery = if review {
             "未自动粘贴"
         } else if paste_error.is_some() {
-            "自动粘贴未完成"
+            "自动粘贴未完成 · 托盘可复制上次结果"
         } else if !auto_paste {
             "自动粘贴已关闭"
         } else {
@@ -414,8 +470,8 @@ impl VoiceLiteApp {
             "未自动粘贴 · 可以开始新的口述".into()
         } else if ai_failed {
             "AI 服务异常 · 未自动粘贴".into()
-        } else if question.is_some() {
-            question_footer(self.state.input_mode).into()
+        } else if let Some(footer) = footer {
+            footer.into()
         } else if review {
             "AI 仍有待确认项 · 请查看文字结果".into()
         } else if let Some(note) = ai_note.as_deref() {
@@ -443,8 +499,11 @@ impl VoiceLiteApp {
                 ok,
             }
         };
-        if let Some(text) = spoken {
-            self.say(&text);
+        if let Some(text) = spoken
+            && let Some(id) = self.say(&text)
+            && let Ok(mut view) = self.settings_view.lock()
+        {
+            view.latency.attach_speech(id);
         }
         self.raise_bar();
     }
@@ -530,6 +589,7 @@ impl VoiceLiteApp {
     }
 
     fn stop_recording(&mut self) {
+        let released = crate::latency::ReleaseTime::now();
         let elapsed = self
             .recording_started_at
             .take()
@@ -545,6 +605,14 @@ impl VoiceLiteApp {
         match services::begin_finish_input(&mut self.state) {
             Ok(work) => {
                 let task = TaskControl::new(Duration::from_secs(120));
+                if let Ok(mut view) = self.settings_view.lock() {
+                    view.latency.begin(
+                        released,
+                        self.state.input_mode,
+                        self.state.clarification.is_some(),
+                        &task,
+                    );
+                }
                 self.active_task = Some(task.clone());
                 let (tx, rx) = mpsc::channel();
                 self.pending = Some(rx);
@@ -571,8 +639,8 @@ impl VoiceLiteApp {
         };
         if expired {
             if let Some(pending) = &self.state.clarification {
-                self.result_text.clone_from(&pending.question);
-                self.paste_note = Some(question_footer(pending.mode).into());
+                self.result_text = pending.question.text().to_owned();
+                self.paste_note = Some(question_footer(pending).into());
                 self.phase = Phase::Awaiting;
             } else {
                 self.phase = Phase::Idle;
@@ -637,14 +705,6 @@ impl VoiceLiteApp {
     }
 
     fn open_settings(&mut self) {
-        if self.settings_open {
-            return;
-        }
-        if let Ok(mut view) = self.settings_view.lock() {
-            let warning = view.save_warning.take();
-            *view = SettingsView::from_state(&self.state);
-            view.save_warning = warning;
-        }
         self.settings_open = true;
     }
 
@@ -677,7 +737,7 @@ impl VoiceLiteApp {
                     }
                 }
                 SettingsAction::TestSpeech => {
-                    self.say("需要确认一下：你说的是访问令牌，还是刷新令牌？")
+                    self.say("需要确认一下：你说的是访问令牌，还是刷新令牌？");
                 }
                 SettingsAction::RestartSpeech => {
                     self.speech.shutdown();
@@ -835,7 +895,17 @@ impl VoiceLiteApp {
                         painter,
                         rect,
                         true,
-                        Some(&key),
+                        Some(
+                            &match self.state.clarification.as_ref().map(|c| &c.question) {
+                                Some(crate::ai::FollowUp::Ready) => {
+                                    format!("可以整理   ·   按住 {key} 补充")
+                                }
+                                Some(
+                                    crate::ai::FollowUp::Deferred | crate::ai::FollowUp::Supplement,
+                                ) => format!("需求访谈   ·   按住 {key} 补充"),
+                                _ => format!("需要确认   ·   按住 {key} 回答"),
+                            },
+                        ),
                         &shown,
                         &self.result_text,
                         note.as_deref(),
@@ -958,11 +1028,13 @@ fn paint_pill(painter: &egui::Painter, rect: Rect, state: PillState<'_>) {
     }
 }
 
-fn question_footer(mode: InputMode) -> &'static str {
-    if mode == InputMode::Interview {
-        "说“先整理到这里”结束访谈 · Esc 取消"
-    } else {
-        "回答后继续整理 · Esc 取消"
+fn question_footer(c: &crate::ai::Clarification) -> &'static str {
+    match (c.mode, &c.question) {
+        (InputMode::Interview, crate::ai::FollowUp::Question(_)) => {
+            "“这个先待定”跳过 · “先整理到这里”结束 · Esc 取消"
+        }
+        (InputMode::Interview, _) => "说“先整理到这里”生成总结 · Esc 取消",
+        _ => "回答后继续整理 · Esc 取消",
     }
 }
 
@@ -970,7 +1042,7 @@ fn paint_card(
     painter: &egui::Painter,
     rect: Rect,
     ok: bool,
-    answer_key: Option<&str>,
+    waiting_title: Option<&str>,
     text: &str,
     full_text: &str,
     note: Option<&str>,
@@ -989,7 +1061,7 @@ fn paint_card(
         StrokeKind::Inside,
     );
 
-    let color = if answer_key.is_some() {
+    let color = if waiting_title.is_some() {
         Color32::from_rgb(250, 198, 108)
     } else if ok {
         DONE
@@ -999,7 +1071,7 @@ fn paint_card(
     let left = rect.left() + CARD_PAD;
     let top = rect.top();
 
-    if answer_key.is_some() {
+    if waiting_title.is_some() {
         let center = Pos2::new(left + 6.0, top + 23.0);
         painter.circle_stroke(center, 7.0, Stroke::new(1.4_f32, color));
         painter.text(
@@ -1030,11 +1102,7 @@ fn paint_card(
     painter.text(
         Pos2::new(left + 22.0, top + 23.0),
         Align2::LEFT_CENTER,
-        match answer_key {
-            Some(key) => format!("需要确认   ·   按住 {key} 回答"),
-            None if ok => "已识别".into(),
-            None => "识别失败".into(),
-        },
+        waiting_title.unwrap_or(if ok { "已识别" } else { "识别失败" }),
         FontId::proportional(12.0),
         color,
     );
@@ -1362,11 +1430,27 @@ mod tests {
     }
 
     #[test]
+    fn reopening_settings_keeps_device_and_recognition_results() {
+        let mut app = test_app();
+        let (tx, rx) = mpsc::channel();
+        app.health_pending = Some(rx);
+        tx.send((true, "model ready".into(), "detected microphone".into()))
+            .unwrap();
+        app.poll_health();
+        app.open_settings();
+        let view = app.settings_view.lock().unwrap();
+        assert_eq!(view.status, "model ready");
+        assert_eq!(view.microphone, "detected microphone");
+        assert!(!view.checking);
+    }
+
+    #[test]
     fn model_change_discards_in_flight_readiness_result() {
         let mut app = test_app();
         let (tx, rx) = mpsc::channel();
         app.health_pending = Some(rx);
-        tx.send((true, "old model ready".into())).unwrap();
+        tx.send((true, "old model ready".into(), "mic".into()))
+            .unwrap();
         app.settings_tx.send(SettingsAction::Online(true)).unwrap();
         app.drain_settings();
         app.poll_health();

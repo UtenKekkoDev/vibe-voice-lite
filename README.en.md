@@ -14,13 +14,19 @@ Click the destination text field, hold **Right Ctrl**, speak, then release. The 
 
 In interview mode, say **“先整理到这里”** as a separate utterance to finish and obtain **已确定** (confirmed) and **待定** (pending) sections. Say **“取消这次整理”** or **“先不处理”** to cancel a pending conversation. Escape cancels while waiting for an answer; switching modes also cancels. “停止” alone is not a fixed command.
 
+During an interview, say **“这个先待定”** on its own to park the current question. You can revisit it later. When the app indicates that the requirements are ready to summarize, you can still add details or say **“先整理到这里”** to finish.
+
 Only clarification/interview questions are spoken automatically. Ordinary feedback, final summaries, errors and completion receipts remain text-only. Holding the talk key interrupts TTS. Conversations are held in process memory and are not restored after exit.
 
-Final text is copied and Ctrl+V is sent only if the selected external window is still foreground and no conflicting modifiers are held. The app cannot verify that every third-party editor accepted the shortcut. Copy/paste failures preserve the text; manual Ctrl+V is available after successful clipboard copy.
+Automatic paste checks the original foreground window, focused control and window title. Some browsers and editors reuse all three across inputs. To recover the last completed transcript or interview summary, choose **复制上次结果** in the tray and paste it manually. Failed recognition and pending interviews preserve that result. The app clears its in-memory copy on exit. Windows manages text already placed on the system clipboard.
+
+Settings shows timings for the last eight turns, measured from releasing the talk key through recognition, the AI response and the first non-silent TTS audio submitted to the output device. Timing history stays in memory.
 
 ## Setup
 
-Open the latest successful main run in [Windows builds](https://github.com/UtenKekkoDev/vibe-voice-lite/actions/workflows/ci.yml?query=branch%3Amain). Sign in to GitHub and download **windows-ci-bundle** under **Artifacts**. Extract it, then unzip `vibe-voice-lite-windows-x64.zip` and launch `vibe-voice-lite.exe`. Published versions appear under [Releases](https://github.com/UtenKekkoDev/vibe-voice-lite/releases).
+**[Download the Windows x64 preview (0.2.0-preview.1)](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/download/v0.2.0-preview.1/vibe-voice-lite-windows-x64.zip)** · [Release notes and SHA-256](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/tag/v0.2.0-preview.1)
+
+Extract the whole ZIP and open `vibe-voice-lite.exe`. On first launch, Settings shows the default microphone, recognition provider, AI configuration and speech worker status. Configure one recognition provider to start dictating. AI and TTS are optional.
 
 Windows 10/11 x64, a microphone and the [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) are required. Release ZIPs are unsigned and exclude models, credentials, Python and CUDA.
 

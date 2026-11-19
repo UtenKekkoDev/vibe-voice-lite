@@ -55,6 +55,7 @@ pub struct SpeechOutput {
     events: Option<Receiver<Value>>,
     job: Option<WorkerJob>,
     request: u64,
+    pub output_times: Vec<crate::latency::OutputMark>,
     active: Option<Instant>,
     started: Instant,
     ready: bool,
@@ -68,6 +69,7 @@ impl Default for SpeechOutput {
             events: None,
             job: None,
             request: 0,
+            output_times: Vec::new(),
             active: None,
             started: Instant::now(),
             ready: false,
@@ -168,7 +170,7 @@ impl SpeechOutput {
             .send(v)
             .context("语音指令管道已关闭")
     }
-    pub fn speak(&mut self, text: &str) -> Result<()> {
+    pub fn speak(&mut self, text: &str) -> Result<u64> {
         if text.trim().is_empty() || text.chars().count() > 500 {
             bail!("播报内容为空或过长，请查看文字结果");
         }
@@ -182,7 +184,7 @@ impl SpeechOutput {
             "语音模型加载中，稍后播报…"
         }
         .into();
-        Ok(())
+        Ok(self.request)
     }
     pub fn stop(&mut self) {
         self.request += 1;
@@ -208,6 +210,19 @@ impl SpeechOutput {
                     self.ready = true;
                     self.status = "Qwen 1.7B · Serena 固定风格 · 就绪".into();
                     crate::config::lifecycle("tts ready");
+                }
+                "first_output" => {
+                    if let (Some(request), Some(counter), Some(worker_first)) = (
+                        e["id"].as_u64(),
+                        e["counter"].as_i64(),
+                        e["first_playback"].as_bool(),
+                    ) {
+                        self.output_times.push(crate::latency::OutputMark {
+                            request,
+                            counter,
+                            worker_first,
+                        });
+                    }
                 }
                 "started" if current => {
                     self.status = "正在播报…".into();

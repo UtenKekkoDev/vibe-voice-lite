@@ -1,5 +1,5 @@
 """Local stdio-only TTS worker. Protocol stdout never contains text or credentials."""
-import sys,os,json,time,threading,pathlib,queue
+import sys,os,json,time,threading,pathlib,queue,ctypes
 ROOT=pathlib.Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT))
 protocol=sys.stdout
@@ -38,11 +38,24 @@ def read_commands():
     # stdin EOF means the parent disappeared, including while model imports/load block.
     os._exit(0)
 
+# The UI also reads the machine-wide QPC. Send the callback timestamp via
+# a queue so a blocked stdout pipe can never stall the realtime audio thread.
+output_marks = queue.SimpleQueue()
+query_counter = ctypes.windll.kernel32.QueryPerformanceCounter
+
+def report_audio_output():
+    first_playback = True
+    while True:
+        request, counter = output_marks.get()
+        event('first_output', request, counter=counter, first_playback=first_playback)
+        first_playback = False
+
 class Player:
     def __init__(self):
         import numpy as np,sounddevice as sd
         self.np=np;self.lock=threading.RLock();self.queue=queue.SimpleQueue()
         self.pending=np.zeros(0,dtype='float32');self.id=0;self.active=False
+        self.output_marked=False;self.counter=ctypes.c_int64()
         self.finished=threading.Event();self.underruns=0;self.driver_errors=0
         hosts=sd.query_hostapis()
         wasapi=next((h for h in hosts if h['name']=='Windows WASAPI'),None)
@@ -58,6 +71,7 @@ class Player:
     def begin(self,request):
         self.cancel()
         with self.lock:
+            self.output_marked=False
             self.id=request;self.underruns=0;self.driver_errors=0;self.finished.clear()
     def put(self,request,audio):
         with self.lock:
@@ -82,6 +96,10 @@ class Player:
                 self.active=True
                 n=min(frames-written,len(self.pending))
                 out[written:written+n,0]=self.pending[:n]
+                if not self.output_marked and self.np.any(self.np.abs(self.pending[:n]) > 0.001):
+                    if query_counter(ctypes.byref(self.counter)):
+                        output_marks.put((self.id, self.counter.value))
+                        self.output_marked = True
                 self.pending=self.pending[n:];written+=n
     def close(self):
         self.cancel();self.stream.abort();self.stream.close()
@@ -100,6 +118,7 @@ try:
     event('warming')
     engine.warmup()
     event('opening_audio')
+    threading.Thread(target=report_audio_output, daemon=True).start()
     with condition: player=Player()
     event('ready')
 except Exception:
