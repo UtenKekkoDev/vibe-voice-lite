@@ -38,8 +38,13 @@ class QwenStream:
 
     def warmup(self):
         self.model.warmup()
-        # Graph capture alone does not warm prefill/vocoder kernels.
-        list(self.stream('已整理完成。'))
+        # One streamed chunk exercises prefill, decode and the vocoder.
+        # Each real utterance resets the seed and KV cache before generation.
+        probe = self.stream('已整理完成。')
+        try:
+            next(probe)
+        finally:
+            probe.close()
 
     @torch.inference_mode()
     def decode(self,codes):

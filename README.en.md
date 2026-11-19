@@ -1,66 +1,67 @@
-# Vibe Voice Lite
+<p align="center"><img src="assets/app-icon.png" width="80" alt=""></p>
+<h1 align="center">Vibe Voice Lite</h1>
+<p align="center">Hold Right Ctrl in a Windows text field to dictate. Turn a spoken idea into a development brief, or work through it one question at a time.</p>
+<p align="center"><strong><a href="https://github.com/UtenKekkoDev/vibe-voice-lite/releases/download/v0.2.0-preview.2/vibe-voice-lite-windows-x64.zip">Download for Windows x64</a></strong> &nbsp;·&nbsp; <a href="https://github.com/UtenKekkoDev/vibe-voice-lite/releases/tag/v0.2.0-preview.2">Release notes</a> &nbsp;·&nbsp; <a href="README.md">中文</a></p>
 
-<img src="assets/app-icon.png" width="112" alt="Vibe Voice Lite">
+<p align="center"><img src="assets/result-card.png" width="520" alt="Floating result card showing a completed Chinese transcription"></p>
 
-A Windows hold-to-talk app with local speech recognition, optional AI editing, requirement interviews and local streaming TTS. [中文说明](README.md)
+## First run
 
-## Use
+1. Extract the entire ZIP and launch `vibe-voice-lite.exe`. The unsigned preview supports Windows 10/11 x64 and requires a microphone and the [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+2. Choose a recognition provider in Settings. Install a local [SenseVoice INT8 model](docs/MODELS.md) or configure Qwen-ASR Realtime. Run the device and recognition check.
+3. Click the destination field, hold **Right Ctrl**, speak, then release. The tray menu lets you change modes, configure the talk key, toggle automatic paste, or copy the last completed result.
 
-Click the destination text field, hold **Right Ctrl**, speak, then release. The tray menu provides settings, three mutually exclusive modes, automatic paste and quit.
+## Choose a mode
 
-- **Dictation**: transcribe directly; optional AI cleanup.
-- **Code editing**: organize spoken development requirements without inventing missing details.
-- **Requirement interview**: one question at a time, spoken through Serena when TTS is enabled. Hold Right Ctrl to answer. Undecided items may be skipped.
+| Mode | When to use it | What you get |
+| --- | --- | --- |
+| Dictation | Messages and notes | A transcript with optional AI cleanup |
+| Code editing | Describing changes to a coding assistant | A brief with goals, constraints and unresolved details |
+| Requirements interview | Exploring an idea before implementation | One question per turn, followed by confirmed and pending items when you finish |
 
-In interview mode, say **“先整理到这里”** as a separate utterance to finish and obtain **已确定** (confirmed) and **待定** (pending) sections. Say **“取消这次整理”** or **“先不处理”** to cancel a pending conversation. Escape cancels while waiting for an answer; switching modes also cancels. “停止” alone is not a fixed command.
+Hold the talk key to interrupt speech and answer. Speak each command as a separate utterance.
 
-During an interview, say **“这个先待定”** on its own to park the current question. You can revisit it later. When the app indicates that the requirements are ready to summarize, you can still add details or say **“先整理到这里”** to finish.
+| Command | Action |
+| --- | --- |
+| **这个先待定** | Park the current question. You can return to it later. |
+| **先整理到这里** | Finish and summarize. A suggestion to wrap up still leaves room for more input. |
+| **取消这次整理** or Esc while waiting | Cancel the conversation. Switching modes or exiting also ends it. |
 
-Only clarification/interview questions are spoken automatically. Ordinary feedback, final summaries, errors and completion receipts remain text-only. Holding the talk key interrupts TTS. Conversations are held in process memory and are not restored after exit.
+“停止” alone is not a finish command.
 
-Automatic paste checks the original foreground window, focused control and window title. Some browsers and editors reuse all three across inputs. To recover the last completed transcript or interview summary, choose **复制上次结果** in the tray and paste it manually. Failed recognition and pending interviews preserve that result. The app clears its in-memory copy on exit. Windows manages text already placed on the system clipboard.
+## AI and spoken questions
 
-Settings shows timings for the last eight turns, measured from releasing the talk key through recognition, the AI response and the first non-silent TTS audio submitted to the output device. Timing history stays in memory.
+Local dictation works on its own. For AI editing or interviews, configure DeepSeek, OpenAI, Ollama or a compatible Chat Completions endpoint with a model name and credentials as needed. Remote AI endpoints require HTTPS. Loopback servers can use HTTP.
 
-## Setup
+Optional **Qwen3-TTS 1.7B CustomVoice / Serena** reads clarification and interview questions aloud. This backend requires an NVIDIA CUDA GPU. Install model weights, Python and CUDA separately. The model stays loaded between questions and is released on speech restart or app exit. [TTS setup](docs/TTS.md)
 
-**[Download the Windows x64 preview (0.2.0-preview.1)](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/download/v0.2.0-preview.1/vibe-voice-lite-windows-x64.zip)** · [Release notes and SHA-256](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/tag/v0.2.0-preview.1)
+### Serena startup in this preview
 
-Extract the whole ZIP and open `vibe-voice-lite.exe`. On first launch, Settings shows the default microphone, recognition provider, AI configuration and speech worker status. Configure one recognition provider to start dictating. AI and TTS are optional.
+Both versions used the same question on an RTX 5080. We alternated versions and started a fresh worker three times per version. Times are medians from submitting the request to the first non-silent audio in the device callback.
 
-Windows 10/11 x64, a microphone and the [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) are required. Release ZIPs are unsigned and exclude models, credentials, Python and CUDA.
+| Scenario | preview.1 | preview.2 |
+| --- | ---: | ---: |
+| Newly started worker | 10.36 s | **8.64 s** |
+| Ready worker | 307 ms | **298 ms** |
 
-- Local recognition: install the [SenseVoice model](docs/MODELS.md), select its directory and run the check in Settings.
-- Optional cloud recognition: configure Qwen-ASR Realtime; audio is transmitted to that provider.
-- AI editing/interviews: configure DeepSeek, OpenAI, Ollama or a compatible Chat Completions endpoint, an available model and credentials.
-- Optional TTS: [setup guide](docs/TTS.md). Qwen3-TTS 1.7B CustomVoice / Serena uses a gentle, slightly slower fixed style. An NVIDIA CUDA GPU is required by the current worker. Its Python runtime and weights are installed separately.
+All 107,520 audio samples and all six streaming chunk boundaries matched for the test sentence. Settings also shows cumulative recognition, AI and playback timings for the last eight turns, starting when the talk key is released.
 
-## Privacy
+## Privacy and paste
 
-Settings are saved under `%LOCALAPPDATA%/VibeVoiceLite/settings.json`. The AI key is encrypted with Windows DPAPI for the current user and bound to its endpoint. Changing endpoints/providers clears the old key. Qwen-ASR keys are session-only.
+- Local recognition and speech synthesis run on-device. Cloud recognition sends audio to your provider. AI editing and interviews send transcripts, glossary entries and conversation history to the selected endpoint.
+- Settings live at `%LOCALAPPDATA%/VibeVoiceLite/settings.json`. Windows DPAPI protects the AI key for the current user and endpoint. Qwen-ASR credentials last for the session. Recordings and transcripts stay out of settings.
+- Automatic paste checks the foreground window, focused control and window title. Some pages reuse all three, and elevated apps may block synthetic input. Use **复制上次结果** in the tray to recover the last completed text. Its in-memory copy clears on exit. Windows manages the clipboard.
+- Opt-in debug logs may contain text. Local TTS paths are stored in `tts/runtime.json`. Review attachments before sharing a report. [Security policy](SECURITY.md)
 
-Recordings, transcripts and interview history are not written to settings. Lifecycle logs contain state/performance metadata; opt-in debug logs may contain text and should not be shared. **AI editing and interviews send transcripts, glossary and prior answers to the configured service.** Local ASR/TTS inference itself does not upload content. See [SECURITY.md](SECURITY.md).
+## Build from source
 
-`tts/runtime.json` contains local paths and is ignored by Git. Copy `runtime.example.json` and edit your local copy. Seed/style consistency does not force identical intonation across different sentences.
-
-## Build
-
-Install Rust stable, Visual Studio C++ Build Tools and Windows SDK. Use a **Developer PowerShell for VS** with `rc.exe` on PATH (or set `RC`):
+Install Rust stable, Visual Studio C++ Build Tools and the Windows SDK. From a **Developer PowerShell for VS** with `rc.exe` on PATH, run:
 
 ```powershell
-cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
 cargo build --locked --release --bin vibe-voice-lite
-python -m compileall -q tts scripts
-python scripts/audit_release.py
 ./scripts/package.ps1
 ```
 
-The first build downloads Rust dependencies and ONNX Runtime. Official pollster 0.4.0 is vendored without machine-specific paths. `run-native.ps1` sets the source TTS directory for development.
+The first build downloads dependencies and ONNX Runtime. Packaging generates the Windows ZIP and its SHA-256 checksum. [Tests, device checks and release workflow](CONTRIBUTING.md)
 
-`package.ps1` creates a ZIP and SHA-256 file containing runtime code, required adjacent DLLs, documentation and a TTS config example. It excludes models and personal configuration. Integration tests for real models, GPU/audio and live AI are opt-in; see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-Original icon artwork is in `assets/app-icon.svg`; the dependency-free `scripts/generate_icons.py` generates PNG, multi-resolution ICO and runtime RGBA. The executable, app window and tray share this artwork.
-
-Based on [vibe-coding-voice](https://github.com/UtenKekkoDev/vibe-coding-voice). MIT; see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Based on [vibe-coding-voice](https://github.com/UtenKekkoDev/vibe-coding-voice). [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

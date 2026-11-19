@@ -19,7 +19,9 @@ New-Item -ItemType Directory -Path (Join-Path $bundle 'docs'),(Join-Path $bundle
 foreach ($file in @('MODELS.md','MODELS.zh-CN.md','TTS.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "docs/$file") -Destination (Join-Path $bundle 'docs')
 }
-Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/app-icon.png') -Destination (Join-Path $bundle 'assets')
+foreach ($file in @('app-icon.png', 'result-card.png')) {
+    Copy-Item -LiteralPath (Join-Path $projectRoot "assets/$file") -Destination (Join-Path $bundle 'assets')
+}
 foreach ($file in @('worker.py','qwen_stream.py','runtime.example.json','requirements.txt','Faster-Qwen-LICENSE')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "tts/$file") -Destination (Join-Path $bundle 'tts')
 }

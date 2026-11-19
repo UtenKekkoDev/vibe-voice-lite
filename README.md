@@ -1,92 +1,67 @@
-# Vibe Voice Lite
+<p align="center"><img src="assets/app-icon.png" width="80" alt=""></p>
+<h1 align="center">Vibe Voice Lite</h1>
+<p align="center">在 Windows 输入框里按住右 Ctrl 说话，松手即可转写。开发需求可以交给 AI 整理，也可以逐轮访谈。</p>
+<p align="center"><strong><a href="https://github.com/UtenKekkoDev/vibe-voice-lite/releases/download/v0.2.0-preview.2/vibe-voice-lite-windows-x64.zip">下载 Windows x64 预览版</a></strong> &nbsp;·&nbsp; <a href="https://github.com/UtenKekkoDev/vibe-voice-lite/releases/tag/v0.2.0-preview.2">版本说明</a> &nbsp;·&nbsp; <a href="README.en.md">English</a></p>
 
-<p align="center"><img src="assets/app-icon.png" width="112" alt="Vibe Voice Lite"></p>
+<p align="center"><img src="assets/result-card.png" width="520" alt="中文识别完成后的悬浮结果卡片"></p>
 
-Windows 上的按住说话工具：语音转写、AI 整理开发需求，以及逐轮提问的需求访谈。
+## 第一次使用
 
-[English](README.en.md) · [识别模型](docs/MODELS.zh-CN.md) · [本地语音播报](docs/TTS.md)
+1. 下载并解压整个 Windows ZIP，启动 `vibe-voice-lite.exe`。支持 Windows 10/11 x64，需要麦克风和 [Microsoft Visual C++ x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)。预览版尚未签名。
+2. 在首次打开的设置中选择识别方式。本地使用 [SenseVoice INT8 模型](docs/MODELS.zh-CN.md)，也可以填写在线 Qwen-ASR Realtime 的配置。点击「重新检查设备和识别」查看状态。
+3. 点击目标输入框，按住 **右 Ctrl** 说一句话，再松开。托盘可以切换模式、修改快捷键或关闭自动粘贴。需要取回最近一次完整正文时，选择 **复制上次结果**。
 
-## 使用方式
+## 三种模式
 
-启动 `vibe-voice-lite.exe` 后，屏幕底部出现小圆点。先点击目标输入框，按住 **右 Ctrl** 说话，松开后识别。托盘右键可打开设置、选择模式、切换自动粘贴、退出。
+| 模式 | 适合什么时候用 | 松开按键后 |
+| --- | --- | --- |
+| 普通口述 | 写消息、记笔记 | 直接转写，也可开启 AI 润色 |
+| 代码整理 | 向开发工具描述改动 | 提取目标、约束和待定项，重要歧义可以继续回答 |
+| 需求访谈 | 目标已有雏形，细节还需讨论 | 每轮问一个重点，结束时输出「已确定」和「待定」 |
 
-| 模式 | 行为 |
+访谈可以从“我想改一下登录失败后的提示”开始。按住说话键会打断当前播报，松开后提交回答。
+
+| 你说或按下 | 程序会怎样处理 |
 | --- | --- |
-| 普通口述 | 直接转写；可选择使用 AI 整理 |
-| 代码整理 | 使用 AI 整理开发需求，保留原意、改口、约束及明确待定项 |
-| 需求访谈 | 主动逐轮提问，每次一个重点，保留历史回答；结束后输出已确定和待定事项 |
+| “这个先待定” | 记下当前问题，允许之后再补充决定 |
+| “先整理到这里” | 结束访谈并生成总结。看到“可以整理了”时也可以继续说 |
+| “取消这次整理”、等待回答时按 Esc | 取消本次对话。切换模式或退出程序也会取消访谈 |
 
-普通反馈与测试语句不强制转成需求，不因缺少实现细节而追问。真正影响原意的歧义才进入确认流程。AI 仍可能误解口述，请核对最终结果。
+请把控制口令单独说成一句。“停止”不是访谈结束口令。
 
-### 需求访谈与控制口令
+## 配置 AI 与语音
 
-1. 托盘选择 **需求访谈（逐步提问）**。
-2. 按住右 Ctrl 说出目标，例如“我想做个待办工具，帮我理清需求”。
-3. 听完一个问题后，继续按住右 Ctrl 回答。单独说 **“这个先待定”** 可搁置当前问题，之后也可以主动补充决定。
-4. 看到 **“可以整理了”** 后，仍可继续补充。随时单独说 **“先整理到这里”**，才会结束并输出“已确定”“待定”两部分。
+普通口述可以只使用本地识别。代码整理和访谈需要 DeepSeek、OpenAI、Ollama 或兼容 Chat Completions 的接口、模型名及相应凭据。远程服务使用 HTTPS，本机回环地址可以使用 HTTP。
 
-- **取消这次整理 / 先不处理**：在等待补充时取消，不生成最终总结。
-- **Esc**：在等待回答时取消。录音或处理期间并非全局取消键。
-- **按住说话键**：打断当前 TTS，开始回答。
-- **切换模式 / 退出程序**：取消本次对话。访谈内容仅保存在当前进程内。
-- 单独说“停止”目前不是固定控制口令。
+需要朗读提问时，可另装 **Qwen3-TTS 1.7B CustomVoice / Serena**。当前后端使用 NVIDIA CUDA，模型权重、Python 和 CUDA 环境均需另行安装。Serena 只自动播报需要回答的问题。预热后模型驻留，重启语音或退出程序时释放。[本地 TTS 配置指南](docs/TTS.md)
 
-启用自动粘贴后，程序检查首轮口述时的前台窗口、焦点和标题。目标改变时会跳过发送快捷键。部分编辑器和网页会复用同一窗口与焦点，因此仍需在目标输入框确认结果。随时从托盘选择 **复制上次结果**，即可取回最近一次完整正文并手动粘贴。未完的访谈和识别失败不会覆盖这条记录。退出会清除程序内存中的副本，已复制的内容由 Windows 剪贴板管理。
+### 本版的 Serena 首播
 
-设置中的耗时记录保留最近 8 轮，按松开说话键后的识别完成、AI 响应与 TTS 首次向音频设备输出非静音数据分段查看。未经过的阶段留空。记录仅驻留在本次会话的内存中。
+RTX 5080 上用同一问句交替测试两个版本，各重启语音后台三次。下表为从提交播报请求到设备首次输出非静音音频的中位数。
 
-## 安装与模型
+| 场景 | preview.1 | preview.2 |
+| --- | ---: | ---: |
+| 后台刚启动 | 10.36 秒 | **8.64 秒** |
+| 后台已就绪 | 307 毫秒 | **298 毫秒** |
 
-**[下载 Windows x64 预览版 0.2.0-preview.1](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/download/v0.2.0-preview.1/vibe-voice-lite-windows-x64.zip)** · [版本说明和 SHA-256](https://github.com/UtenKekkoDev/vibe-voice-lite/releases/tag/v0.2.0-preview.1)
+测试句的 107,520 个音频采样和六个流式分块逐一一致。设置里的「本次运行耗时」可查看最近八轮从松键到识别、AI 响应和播报首音的累计时间。
 
-解压整个 ZIP，双击 `vibe-voice-lite.exe`。首次启动会打开设置，显示默认麦克风、所选识别方式、AI 接口配置和语音后台状态。先配置一种识别方式即可开始普通口述，AI 与 TTS 可按需开启。
+## 隐私与投递
 
-需要 Windows 10/11 x64、麦克风、识别模型，以及 [Microsoft Visual C++ x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)。当前构建没有数字签名，**不包含模型权重、API Key、Python 或 CUDA 环境**。
-
-- 本地识别：下载官方 sherpa-onnx SenseVoice INT8 模型，在设置中选择模型目录并检查。见[模型说明](docs/MODELS.zh-CN.md)。也可放在 exe 旁的 `models/` 下。
-- 在线识别：可选 Qwen-ASR Realtime，将音频发送到配置的服务。
-- AI 整理 / 访谈：配置 DeepSeek、OpenAI、Ollama 或兼容 Chat Completions 的接口、模型及密钥。模型名称应使用账号实际可用的值。
-- 本地 TTS：可选 Qwen3-TTS 1.7B CustomVoice / Serena。当前采用轻柔亲切、语速稍慢的风格；仅播报确认和访谈问题，不朗读完成回执或最终正文。需要 NVIDIA CUDA GPU，配置见 [TTS setup](docs/TTS.md)。
-
-Qwen 语音后台预热后驻留；重启语音或退出程序会释放它。固定风格和随机种子可减少随机变化，但不同句子仍有自然的重音、停顿变化。
-
-## 隐私与配置
-
-- 设置存放于 `%LOCALAPPDATA%/VibeVoiceLite/settings.json`。
-- AI Key 使用当前 Windows 用户的 DPAPI 加密，绑定目标接口；清空字段会删除，切换服务或接口会清空旧密钥。Qwen-ASR Key 仅保留在本次会话。
-- 原始录音、转写和问答不写入设置；生命周期日志只记状态与性能元数据。主动开启 `VIBE_LITE_DEBUG` 的调试日志可能含文本，不要公开上传。
-- **AI 整理和需求访谈会把转写、术语表、历轮问答发送到所选服务。** 本地 SenseVoice 和本地 TTS 本身不上传内容。详见 [SECURITY.md](SECURITY.md)。
-- `tts/runtime.json` 是本机私有路径配置，不提交到 Git；仓库只提供 `runtime.example.json`。
+- 本地识别与 TTS 在设备上运行。启用在线识别会向服务商发送音频；启用 AI 会向所选服务发送转写、术语表和历轮问答。
+- 设置位于 `%LOCALAPPDATA%/VibeVoiceLite/settings.json`。AI 密钥由 Windows DPAPI 加密并绑定当前用户和接口，Qwen-ASR 密钥仅在当前会话保存。录音与转写不会写入设置。
+- 自动粘贴会检查前台窗口、焦点和标题。部分网页复用这些信息，管理员窗口也可能拦截快捷键。可从托盘取回最近一次完整正文；退出时清除内存副本，已复制的内容由 Windows 剪贴板管理。
+- 调试日志可能包含文字。本机 TTS 路径保存在 `tts/runtime.json`。分享问题报告前请检查附件。[安全说明](SECURITY.md)
 
 ## 从源码构建
 
-需要 Rust stable（支持 edition 2024 / let chains）、Visual Studio C++ Build Tools 和 Windows SDK。在 **Developer PowerShell for VS** 中执行，确保 `rc.exe` 可用：
+准备 Rust stable、Visual Studio C++ Build Tools 和 Windows SDK，在能找到 `rc.exe` 的 **Developer PowerShell for VS** 中运行：
 
 ```powershell
 cargo build --locked --release --bin vibe-voice-lite
-```
-
-首次构建需联网下载 crates 和 ONNX Runtime。项目内包含官方 pollster 0.4.0 源码，以及修正了新版 Cargo DLL 复制路径的 ort-sys 构建兼容补丁；不依赖开发者电脑上的路径。
-
-```powershell
-cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
-python -m compileall -q tts scripts
-python scripts/audit_release.py
 ./scripts/package.ps1
 ```
 
-打包脚本只复制程序、运行 DLL、TTS 源码、配置示例和文档，输出 ZIP 与 SHA-256；不会打包本机模型、配置或录音。
+首次构建会下载依赖和 ONNX Runtime。打包脚本生成 Windows ZIP 与 SHA-256 校验文件。格式检查、测试、真机验证与发布流程见[贡献指南](CONTRIBUTING.md)。
 
-`./run-native.ps1` 从源码运行并设置 TTS 目录。图标源文件是 `assets/app-icon.svg`，运行 `python scripts/generate_icons.py` 可重新生成 PNG、ICO 和 RGBA；不需要图形库。exe、窗口和托盘共用同一个图案。
-
-普通测试不需要网络服务账号或模型；真实模型/设备/API 测试默认忽略，运行方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 限制与来源
-
-当前为早期版本，未签名。自动粘贴不支持跨越 Windows 权限边界；换电脑需要重新配置模型和可选 TTS 环境。AI 是否追问仍取决于模型判断，不能保证每次都正确。
-
-基于 [UtenKekkoDev/vibe-coding-voice](https://github.com/UtenKekkoDev/vibe-coding-voice) 演进，保留原项目的语音识别基础并重写界面、投递、AI 与 TTS 流程。
-
-MIT，见 [LICENSE](LICENSE) 与 [第三方说明](THIRD_PARTY_NOTICES.md)。
+本项目基于 [vibe-coding-voice](https://github.com/UtenKekkoDev/vibe-coding-voice) 开发。[MIT 许可证](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)

@@ -44,6 +44,31 @@ def render(text):
     }
 
 
+def check_decode_masks():
+    """The optimized table must match single-token HF masks at padding boundaries."""
+    import torch
+    from transformers.masking_utils import create_causal_mask
+
+    graph = engine.model.talker_graph
+    dummy = torch.zeros(1, 1, graph.hidden_size, dtype=graph.dtype, device=graph.device)
+    with torch.inference_mode():
+        for padding in (None, 0, 3):
+            mask = None
+            if padding is not None:
+                mask = torch.ones(1, graph.max_seq_len, dtype=torch.long, device=graph.device)
+                mask[:, :padding] = 0
+            graph._build_attention_masks(mask)
+            for position in (0, 2, 3, graph.max_seq_len // 2, graph.max_seq_len - 1):
+                expected = create_causal_mask(
+                    config=graph.model.config,
+                    input_embeds=dummy,
+                    attention_mask=mask,
+                    cache_position=torch.tensor([position], device=graph.device),
+                    past_key_values=graph.static_cache,
+                )
+                assert torch.equal(graph.attn_mask_table[position], expected), (padding, position)
+
+
 first, first_codes, timing = render(question)
 baseline = args.output / "baseline.npz"
 if args.verify_restart:
@@ -64,3 +89,5 @@ else:
     report = {"initial": timing, "after_other_text_and_cancel": repeated_timing}
     (args.output / "stability.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("PASS repeat after other text and cancellation", json.dumps(report), flush=True)
+
+check_decode_masks()

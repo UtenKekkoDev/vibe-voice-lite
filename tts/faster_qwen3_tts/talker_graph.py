@@ -71,20 +71,36 @@ class TalkerGraph:
     def _build_attention_masks(self, attention_mask: torch.Tensor | None = None):
         dummy = torch.zeros(1, 1, self.hidden_size, dtype=self.dtype, device=self.device)
         max_len = self.max_seq_len
-        self.attn_mask_table = [None] * max_len
+        sliding = self.model.config.sliding_window is not None
+        mask_fn = create_sliding_window_causal_mask if sliding else create_causal_mask
 
-        mask_fn = create_causal_mask if self.model.config.sliding_window is None else create_sliding_window_causal_mask
-
-        for i in range(max_len):
-            pos = torch.tensor([i], device=self.device)
-            full = mask_fn(
+        # Full SDPA attention over a static cache uses the same key range for
+        # every decode position. Build all query rows with the original HF mask
+        # function and copy one row into the graph's fixed buffer at replay.
+        table = None
+        if not sliding and self.model.config._attn_implementation == "sdpa":
+            matrix = mask_fn(
                 config=self.model.config,
-                input_embeds=dummy,
+                input_embeds=dummy.expand(-1, max_len, -1),
                 attention_mask=attention_mask,
-                cache_position=pos,
+                cache_position=torch.arange(max_len, device=self.device),
                 past_key_values=self.static_cache,
             )
-            self.attn_mask_table[i] = full
+            if matrix is not None and matrix.shape[-2:] == (max_len, max_len):
+                table = matrix.split(1, dim=-2)
+
+        if table is None:
+            table = [
+                mask_fn(
+                    config=self.model.config,
+                    input_embeds=dummy,
+                    attention_mask=attention_mask,
+                    cache_position=torch.tensor([i], device=self.device),
+                    past_key_values=self.static_cache,
+                )
+                for i in range(max_len)
+            ]
+        self.attn_mask_table = table
 
         if self.attn_mask is None:
             self.attn_mask = self.attn_mask_table[0].clone()

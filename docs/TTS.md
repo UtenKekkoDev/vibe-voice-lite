@@ -3,8 +3,11 @@
 TTS is optional. Dictation and AI text editing work without it. The local streaming
 runtime is tested on Windows 11, Python 3.12, an NVIDIA RTX 5080 and CUDA PyTorch.
 It is not a CPU-only implementation. Allow roughly 5 GB of free VRAM, with more
-headroom for other GPU workloads. First load and warmup on the tested PC takes
-about 9–12 seconds; hardware and drivers affect timings.
+headroom for other GPU workloads. On the test RTX 5080, a question queued at
+worker startup reached the first non-silent audio callback in 8.50–8.66 seconds
+across three fresh worker processes. The same question on a ready worker took
+0.29–0.31 seconds. These measurements include local model startup when applicable.
+OS file caches, driver state and other workloads affect the result.
 
 1. Install Python 3.12 and a compatible NVIDIA driver.
 2. From the app/repository directory, create a virtual environment:
